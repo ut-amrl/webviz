@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+
+  <script type="text/javascript"
+    src="http://static.robotwebtools.org/EventEmitter2/current/eventemitter2.min.js"></script>
+  <script type="text/javascript" src="http://static.robotwebtools.org/roslibjs/current/roslib.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      background: #eee;
+    }
+
+    #canvas {
+      background: #fff;
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -webkit-touch-callout: none;
+      -khtml-user-select: none;
+      -ms-user-select: none;
+      outline: none;
+      -webkit-tap-highlight-color: rgba(255, 255, 255, 0);
+      /* mobile webkit */
+    }
+
+    input[type=button] {
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -webkit-touch-callout: none;
+      -khtml-user-select: none;
+      -ms-user-select: none;
+      outline: none;
+      -webkit-tap-highlight-color: rgba(255, 255, 255, 0);
+      /* mobile webkit */
+    }
+  </style>
+
+</head>
+
+<body>
+  <h1>UT AUTOmata Web Interface</h1>
+
+  Robot IP Address: <input type="text" id="ipaddr" value="localhost">
+  <input type="button" id="connect" onclick="connect()" value="Connect"><br>
+  Status: <label id="status">Disconnected</label><br>
+  <input type="button" id="setLocation" onclick="setLocationButton()" value="Set Pose">
+  <input type="button" id="setNavGoal" onclick="setNavGoalButton()" value="Set Nav Target">
+  Map:
+  <select id="map" value="GDC1" onchange="changeMap()">
+    <option value="GDC1">GDC1</option>
+    <option value="GDC2">GDC2</option>
+    <option value="GDC3">GDC3</option>
+    <option value="EmptyMap">EmptyMap</option>
+    <option value="UT_Campus">UT_Campus</option>
+  </select>
+  <br>
+  <canvas id="canvas" width="800" height="600" tabindex="0"> </canvas>
+  <br>
+  <label id="coords">0,0</label>
+
+
+  <script type="text/javascript" type="text/javascript">
+    var canvas = document.getElementById("canvas");
+    var visMsg = undefined;
+    var scale = 20;
+    var origin = { x: 0.5 * canvas.width, y: 0.5 * canvas.height };
+    var prev_origin = { x: 0, y: 0 };
+    var ctx = canvas.getContext("2d");
+    var mouseDownLoc;
+    var mouseDown = false;
+    var setLocation = false;
+    var setNavGoal = false;
+    var coords = document.getElementById("coords");
+    var mapList = document.getElementById("map");
+    var robotPose = undefined;
+    var tLastDraw = 0;
+    var map = [];
+    var lastLaserScan = undefined;
+    var robot_interface = undefined;
+    var currentMapName = '';
+
+    try {
+      if (window.localStorage.getItem('ipaddr')) {
+        document.getElementById('ipaddr').value =
+          window.localStorage.getItem('ipaddr');
+      }
+    } catch (e) {
+      updateStatus('Unable to access localstorage, IP will not be saved');
+    }
+    canvas.width = window.innerWidth;
+    canvas.height = Math.max(600, window.innerHeight - 175);
+    origin = { x: 0.5 * canvas.width, y: 0.5 * canvas.height };
+    canvas.addEventListener('wheel', onMouseScroll, false);
+    window.addEventListener("keypress", onKeyPress, false);
+    canvas.onmouseup = onMouseUp;
+    canvas.onmousedown = onMouseDown;
+    canvas.onmousemove = onMouseMove;
+    changeMap();
+
+    class DataParser {
+      constructor(arrayBuffer) {
+        this.header = {
+          num_points: 0,
+          num_lines: 0,
+          num_arcs: 0,
+          num_laser_rays: 0,
+          num_local_points: 0,
+          num_local_lines: 0,
+          num_local_arcs: 0,
+          laser_min_angle: 0,
+          laser_max_angle: 0,
+          robot_pose: { x: NaN, y: NaN, theta: NaN },
+          map: ''
+        };
+
+        this.length = arrayBuffer.byteLength;
+        this.remainingBytes = this.length;
+        this.dataView = new DataView(arrayBuffer, 0);
+        this.offset = 0;
+        this.littleEndian = true;
+        // The first 4 bytes are the encoded number '42'.
+        // If the data is littleEndian the first byte should not be 0.
+        if (arrayBuffer[0] === 0) {
+          this.littleEndian = false;
+        }
+        this.offset += 4;
+        this.remainingBytes -= 4;
+      }
+
+      readUint8() {
+        let x = this.dataView.getUint8(this.offset, this.littleEndian);
+        this.offset += 1;
+        this.remainingBytes -= 1;
+        return x;
+      }
+
+      readUint32() {
+        let x = this.dataView.getUint32(this.offset, this.littleEndian);
+        this.offset += 4;
+        this.remainingBytes -= 4;
+        return x;
+      }
+
+      readUint16() {
+        let x = this.dataView.getUint16(this.offset, this.littleEndian);
+        this.offset += 2;
+        this.remainingBytes -= 2;
+        return x;
+      }
+
+      readFloat32() {
+        let x = this.dataView.getFloat32(this.offset, this.littleEndian);
+        this.offset += 4;
+        this.remainingBytes -= 4;
+        return x;
+      }
+
+      readHeader() {
+        this.header.num_points = this.readUint32();
+        this.header.num_lines = this.readUint32();
+        this.header.num_arcs = this.readUint32();
+        this.header.num_laser_rays = this.readUint32();
+        this.header.num_local_points = this.readUint32();
+        this.header.num_local_lines = this.readUint32();
+        this.header.num_local_arcs = this.readUint32();
+        this.header.laser_min_angle = this.readFloat32();
+        this.header.laser_max_angle = this.readFloat32();
+        this.header.robot_pose = this.readPose();
+        this.header.map = '';
+        for (let i = 0; i < 16; ++i) {
+          const c = this.readUint8();
+          if (c > 0) {
+            this.header.map += String.fromCharCode(c);
+          }
+        }
+        return this.header;
+      }
+
+      readPose() {
+        let pose = {
+          x: 0,
+          y: 0,
+          theta: 0
+        };
+        pose.x = this.readFloat32();
+        pose.y = this.readFloat32();
+        pose.theta = this.readFloat32();
+        return pose;
+      }
+
+      readMultiple(n, reader) {
+        let arr = [];
+        for (let i = 0; i < n; ++i) {
+          arr.push(reader());
+        }
+        return arr;
+      }
+
+      readLaser() {
+        let laser = {
+          angle_min: this.header.laser_min_angle,
+          angle_max: this.header.laser_max_angle,
+          ranges: this.readMultiple(this.header.num_laser_rays, () => this.readUint32())
+        }
+        for (let i = 0; i < laser.ranges.length; ++i) {
+          laser.ranges[i] = 0.001 * laser.ranges[i];
+        }
+        return laser;
+      }
+
+      readColor() {
+        const c = this.readUint32();
+        const r = (c & 0xFF0000) >> 16;
+        const g = (c & 0xFF00) >> 8;
+        const b = c & 0xFF;
+        return `rgb(${r},${g},${b})`;
+      }
+
+      readPoint2D() {
+        return {
+          x: this.readFloat32(),
+          y: this.readFloat32()
+        };
+      }
+
+      readPoint() {
+        return {
+          point: this.readPoint2D(),
+          color: this.readColor()
+        };
+      }
+
+      readLine() {
+        return {
+          p0: this.readPoint2D(),
+          p1: this.readPoint2D(),
+          color: this.readColor()
+        };
+      }
+
+      readArc() {
+        return {
+          center: this.readPoint2D(),
+          radius: this.readFloat32(),
+          start_angle: this.readFloat32(),
+          end_angle: this.readFloat32(),
+          color: this.readColor()
+        };
+      }
+
+      readMessage() {
+        let message = {
+          header: this.readHeader(),
+          laser: this.readLaser(),
+          points: this.readMultiple(this.header.num_points, () => this.readPoint()),
+          lines: this.readMultiple(this.header.num_lines, () => this.readLine()),
+          arcs: this.readMultiple(this.header.num_arcs, () => this.readArc()),
+          robotPose: undefined
+        }
+        message.robotPose = message.header.robot_pose;
+        return message;
+      }
+    };
+
+    class RobotInterface {
+      // Constructor: set up callbacks.
+      constructor() {
+        this.socket = null;
+        // Set up callbacks.
+        this.callbacks = {
+          onopen: null,
+          onReceiveRobotData: null,
+          onReceiveJSON: null,
+          onerror: null,
+          onclose: null
+        };
+      }
+
+      onopen(event) {
+        console.log(`Connected to ${this.socket.url}`);
+        if (this.callbacks.onopen) this.callbacks.onopen(event);
+      }
+
+      onReceiveRobotData(data) {
+        let parser = new DataParser(data);
+        let message = parser.readMessage();
+        this.callbacks.onReceiveRobotData(message);
+      }
+
+      onmessage(event) {
+        if (typeof (event.data) === "string" &&
+          this.callbacks.onReceiveJSON) {
+          this.callbacks.onReceiveJSON(JSON.parse(event.data));
+        } else if (typeof (event.data) === "object" &&
+          this.callbacks.onReceiveRobotData) {
+          new Response(event.data).arrayBuffer().then(
+            (data) => this.onReceiveRobotData(data)
+          );
+        } else {
+          console.error(`Unknown data type: ${typeof (event.data)}`);
+        }
+      }
+
+      onclose(e) {
+        if (event.wasClean) {
+          console.log(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);
+        } else {
+          // e.g. server process killed or network down
+          // event.code is usually 1006 in this case
+          console.log('[close] Connection died');
+        }
+        if (this.callbacks.onclose) this.callbacks.onclose(e);
+        this.socket = null;
+        close();
+      }
+
+      onerror(error) {
+        console.log(`[error] ${error.message}`);
+        if (this.callbacks.onerror) this.callbacks.onerror(e);
+      }
+
+      // Connect to a host.
+      connect(hostname, callbacks) {
+        this.callbacks = callbacks;
+        // Create ws.
+        if (this.socket) {
+          console.error(`Error: Already connected to ${this.socket.url}`);
+          return;
+        }
+        try {
+          this.socket = new WebSocket("ws://" + hostname + ":10272");
+        } catch (error) {
+          this.onerror(error);
+          return;
+        }
+        this.socket.onopen = (e) => this.onopen(e);
+        this.socket.onmessage = (e) => this.onmessage(e);
+        this.socket.onclose = (e) => this.onclose(e);
+        this.socket.onerror = (e) => this.onerror(e);
+      }
+
+      // Send initial pose message.
+      setInitialPose(x, y, theta) {
+        if (!this.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        this.socket.send(JSON.stringify({
+          type: "set_initial_pose",
+          x: x,
+          y: y,
+          theta: theta,
+          map: currentMapName
+        }));
+      }
+
+      // Send navigation target.
+      setNavGoal(x, y, theta) {
+        if (!this.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        this.socket.send(JSON.stringify({
+          type: "set_nav_goal",
+          x: x,
+          y: y,
+          theta: theta,
+          map: currentMapName
+        }));
+      }
+
+      close() {
+        if (!this.socket) return;
+        this.socket.close();
+        this.socket = null;
+      }
+    };
+
+    function changeMap() {
+      currentMapName = mapList.value;
+      loadMap(currentMapName);
+    }
+
+    function loadMap(mapName) {
+      let found = false;
+      for (var opt, j = 0; opt = mapList.options[j]; j++) {
+        if (opt.value == mapName) {
+          mapList.selectedIndex = j;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        let opt = document.createElement('option');
+        opt.appendChild(document.createTextNode(mapName));
+        opt.value = mapName;
+        mapList.appendChild(mapName);
+        mapList.selectedIndex = mapList.options.length - 1;
+      }
+      let url = `https://amrl.cs.utexas.edu/amrl_maps/${mapName}/${mapName}.vectormap.json`;
+      console.log(`Loading "${url}"`);
+      var xhr = new XMLHttpRequest();
+      // xhr.responseType = 'json';
+      xhr.onload = function () {
+        var status = xhr.status;
+        if (status === 200) {
+          map = JSON.parse(xhr.response);
+          console.log(`Loaded map "${mapName}"`);
+        } else {
+          console.log(`Error loading map "${mapName}"`);
+        }
+      };
+      xhr.open('GET', url, true);
+      xhr.send();
+    }
+
+    function setLocationButton() {
+      setLocation = true;
+      setNavGoal = false;
+      document.getElementById("setLocation").style = "border-style:inset;";
+    }
+
+    function setNavGoalButton() {
+      setLocation = false;
+      setNavGoal = true;
+      document.getElementById("setNavGoal").style = "border-style:inset;";
+    }
+
+    // Get the "true" mouse location, compensting for scroll, zoom, etc.
+    function getMouseLocation(event, element) {
+      var posx = 0;
+      var posy = 0;
+      if (!event) var event = window.event;
+      if (event.pageX || event.pageY) {
+        posx = event.pageX;
+        posy = event.pageY;
+      } else if (event.clientX || event.clientY) {
+        posx = event.clientX + document.body.scrollLeft
+          + document.documentElement.scrollLeft;
+        posy = event.clientY + document.body.scrollTop
+          + document.documentElement.scrollTop;
+      }
+      if (element != undefined &&
+        isFinite(element.offsetLeft) &&
+        isFinite(element.offsetTop)) {
+        posx -= element.offsetLeft;
+        posy -= element.offsetTop;
+      }
+      return ({ x: posx, y: posy });
+    }
+
+    function canvasToWorld(p) {
+      return {
+        x: (p.x - origin.x) / scale,
+        y: (origin.y - p.y) / scale
+      };
+    }
+
+    function worldToCanvas(p) {
+      return {
+        x: p.x * scale + origin.x,
+        y: origin.y - p.y * scale
+      };
+    }
+
+    function onMouseMove(event) {
+      loc = getMouseLocation(event, canvas);
+      w = canvasToWorld(loc);
+      const x_str = w.x.toFixed(3);
+      const y_str = w.y.toFixed(3);
+      coords.innerHTML = `x=${x_str}, y=${y_str}`;
+      if (!mouseDown) return;
+      if (setLocation || setNavGoal) return;
+      origin.x = prev_origin.x + loc.x - mouseDownLoc.x;
+      origin.y = prev_origin.y + loc.y - mouseDownLoc.y;
+    };
+
+    function onMouseDown(event) {
+      mouseDownLoc = getMouseLocation(event, canvas);
+      mouseDown = true;
+      prev_origin = { x: origin.x, y: origin.y };
+      if (event.ctrlKey) {
+        setNavGoal = true;
+      } else if (event.shiftKey) {
+        setLocation = true;
+      }
+    };
+
+    function onMouseUp(event) {
+      let loc = getMouseLocation(event, canvas);
+      let w = canvasToWorld(loc);
+      if (setNavGoal) {
+        // Set nav target here.
+        if (robot_interface) {
+          let w0 = canvasToWorld(mouseDownLoc);
+          let a = Math.atan2(mouseDownLoc.y - loc.y, loc.x - mouseDownLoc.x);
+          robot_interface.setNavGoal(w0.x, w0.y, a);
+        }
+      } else if (setLocation) {
+        // Set localization here.
+        if (robot_interface) {
+          let w0 = canvasToWorld(mouseDownLoc);
+          let a = Math.atan2(mouseDownLoc.y - loc.y, loc.x - mouseDownLoc.x);
+          robot_interface.setInitialPose(w0.x, w0.y, a);
+        }
+      } else {
+        // Pan.
+        origin.x = prev_origin.x + loc.x - mouseDownLoc.x;
+        origin.y = prev_origin.y + loc.y - mouseDownLoc.y;
+        prev_origin = origin;
+      }
+      setNavGoal = false;
+      setLocation = false;
+      mouseDown = false;
+      document.getElementById("setLocation").style = "";
+      document.getElementById("setNavGoal").style = "";
+    }
+
+    function onMouseScroll(event) {
+      let loc = getMouseLocation(event, canvas);
+      let s1 = scale;
+      if (event.deltaY > 0) {
+        scale *= 0.95;
+        //
+      } else if (event.deltaY < 0) {
+        scale *= 1.05;
+      }
+      let s2 = scale;
+      origin.x = loc.x * (s1 - s2) / s1 + s2 / s1 * origin.x;
+      origin.y = loc.y * (s1 - s2) / s1 + s2 / s1 * origin.y;
+      event.preventDefault();
+      return false;
+    }
+
+
+    function onKeyPress(event) {
+      // console.log("Pressed: " + event.which);
+    };
+
+    function drawPoint(color, x, y) {
+      ctx.fillStyle = color;
+      const p = worldToCanvas({ x: x, y: y });
+      ctx.fillRect(p.x, p.y, 2, 2);
+    }
+
+    function drawLine(color, x1, y1, x2, y2) {
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      const p1 = worldToCanvas({ x: x1, y: y1 });
+      const p2 = worldToCanvas({ x: x2, y: y2 });
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+
+    function updateStatus(str) {
+      let s = document.getElementById("status");
+      s.innerHTML = str;
+    }
+
+    function receiveData(d) {
+      // console.log(d.header);
+      visMsg = d;
+      lastLaserScan = d.laser;
+      robotPose = d.robotPose;
+    }
+
+    function processJsonData(json) {
+      console.log("Received JSON:");
+      console.log(json);
+    }
+
+    function close(event) {
+      console.log('Robot interface closed.');
+      robot_interface = undefined;
+      document.getElementById("connect").value = "Connect";
+      updateStatus(`Disconnected`);
+    }
+
+    function onopen(event) {
+      let ipaddr = document.getElementById('ipaddr').value;
+      try {
+        window.localStorage.setItem('ipaddr', ipaddr)
+      } catch (e) {
+        console.log('Localstorage denied');
+      }
+      document.getElementById("connect").value = "Disconnect";
+      updateStatus(`Connected to ${ipaddr}`);
+    }
+
+    function connect() {
+      if (robot_interface) {
+        // Disconnect.
+        robot_interface.close();
+        document.getElementById("connect").value = "Connect";
+        robot_interface = undefined;
+      } else {
+        // Connect.
+        let ipaddr = document.getElementById('ipaddr').value;
+        let callbacks = {
+          onReceiveRobotData: receiveData,
+          onReceiveJSON: processJsonData,
+          onopen: onopen,
+          close: close
+        };
+        robot_interface = new RobotInterface();
+        robot_interface.connect(ipaddr, callbacks);
+      }
+    }
+
+    // DRAW LOOP
+    window.requestAnimationFrame = window.requestAnimationFrame ||
+      window.webkitRequestAnimationFrame || window.mozRequestAnimationFrame ||
+      window.msRequestAnimationFrame;
+
+    function drawLoop() {
+      requestAnimationFrame(drawLoop);
+      draw();
+    }
+
+    window.onload = function () {
+      drawLoop();
+    };
+
+    function subscribe(topic, type, callback) {
+      let listener = new ROSLIB.Topic({
+        ros: ros,
+        name: topic,
+        messageType: type,
+        queue_size: 1,
+        throttle_rate: 10
+      });
+
+      listener.subscribe(callback);
+    }
+
+    function drawMap() {
+      ctx.lineWidth = 1;
+      map.forEach(function (l) {
+        drawLine("#319bd4", l.p0.x, l.p0.y, l.p1.x, l.p1.y);
+      });
+    }
+
+    function drawPose(p, color) {
+      const l = 0.5;
+      const h = 0.1;
+      const a = p.theta;
+      const dir = { x: Math.cos(a), y: Math.sin(a) };
+      const perp = { x: -dir.y, y: dir.x };
+      const p0 = p;
+      const p1 = { x: p0.x + l * dir.x, y: p0.y + l * dir.y };
+      const p2 = {
+        x: p1.x + h * (-dir.x + perp.x),
+        y: p1.y + h * (-dir.y + perp.y)
+      };
+      const p3 = {
+        x: p1.x + h * (-dir.x - perp.x),
+        y: p1.y + h * (-dir.y - perp.y)
+      };
+      const kPoseColor = color;
+      drawLine(kPoseColor, p0.x, p0.y, p1.x, p1.y);
+      drawLine(kPoseColor, p2.x, p2.y, p1.x, p1.y);
+      drawLine(kPoseColor, p3.x, p3.y, p1.x, p1.y);
+    }
+
+    function draw() {
+      const kDrawInterval = 0.03;
+      const tNow = window.performance.now();
+      if (tNow - tLastDraw < kDrawInterval) return;
+      tLastDraw = tNow;
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (visMsg && currentMapName !== visMsg.header.map) {
+        currentMapName = visMsg.header.map;
+        loadMap(visMsg.header.map);
+      }
+      drawGrid();
+      drawMap();
+      drawLaserScan();
+      drawPoints();
+      drawLines();
+      drawArcs();
+      if (visMsg) drawPose(visMsg.header.robot_pose, 'rgb(0, 150, 0)');
+    }
+
+    function setColor(c) {
+      ctx.fillStyle = `rgb(${c.r * 255},${c.g * 255},${c.b * 255})`;
+    }
+
+    function drawPoints() {
+      if (visMsg === undefined) return;
+      visMsg.points.forEach(function (p, i) {
+        point = p.point;
+        if (i < visMsg.header.num_local_points) {
+          point = robotToMap(point);
+        }
+        drawPoint(p.color, point.x, point.y);
+      });
+    }
+
+    function robotToMap(p) {
+      if (visMsg === undefined ||
+        visMsg.header === undefined ||
+        visMsg.header.robot_pose === undefined) {
+        return p;
+      }
+      let a = visMsg.header.robot_pose.theta;
+      let c = Math.cos(a);
+      let s = Math.sin(a);
+      return {
+        x: c * p.x - s * p.y + visMsg.header.robot_pose.x,
+        y: s * p.x + c * p.y + visMsg.header.robot_pose.y
+      };
+    }
+
+    function drawLines() {
+      if (visMsg === undefined) return;
+      // console.log(visMsg.lines);
+      visMsg.lines.forEach(function (l, i) {
+        let p0 = l.p0;
+        let p1 = l.p1;
+        if (i < visMsg.header.num_local_lines) {
+          p0 = robotToMap(p0);
+          p1 = robotToMap(p1);
+        }
+        drawLine(l.color, p0.x, p0.y, p1.x, p1.y);
+      });
+    }
+
+    function drawArcs() {
+      if (visMsg === undefined) return;
+      // console.log(visMsg.arcs);
+      visMsg.arcs.forEach(function (a, i) {
+        let center = a.center;
+        let theta0 = a.start_angle;
+        let theta1 = a.end_angle;
+        if (i < visMsg.header.num_local_arcs) {
+          center = robotToMap(center);
+          theta0 += visMsg.header.robot_pose.theta;
+          theta1 += visMsg.header.robot_pose.theta;
+        }
+        drawArc(a.color, center.x, center.y, a.radius, theta0, theta1);
+      });
+    }
+
+    function drawArc(color, x, y, r, a0, a1) {
+      ctx.strokeStyle = color;
+      const p = worldToCanvas({ x: x, y: y });
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r * scale, -a0, -a1, true);
+      ctx.stroke();
+    }
+
+    function angleMod(angle) {
+      angle -= 2 * Math.PI * Math.round(angle / (2 * Math.PI));
+      return angle;
+    }
+
+    function drawPathOption(color, o, drawClearance) {
+      if (Math.abs(o.curvature) < 1e-4) {
+        // Straight line.
+        let p0 = { x: 0, y: 0 };
+        let p1 = { x: o.distance, y: 0 };
+        let a = 0;
+        if (robotPose !== undefined) {
+          p0 = robotPose;
+          a = robotPose.theta;
+          let c = Math.cos(robotPose.theta);
+          let s = Math.sin(robotPose.theta);
+          let d = o.distance;
+          p1 = { x: robotPose.x + d * c, y: robotPose.y + d * s };
+        }
+        drawLine(color, p0.x, p0.y, p1.x, p1.y);
+        if (drawClearance) {
+          let c = Math.cos(a);
+          let s = Math.sin(a);
+          let d = o.clearance;
+          drawLine(color,
+            p0.x - s * d, p0.y + c * d,
+            p1.x - s * d, p1.y + c * d);
+          drawLine(color,
+            p0.x + s * d, p0.y - c * d,
+            p1.x + s * d, p1.y - c * d);
+        }
+        return;
+      }
+      let r = 1 / o.curvature;
+      let center = {
+        x: 0,
+        y: r
+      };
+      let a0 = (r > 0) ?
+        (-Math.PI / 2) :
+        (Math.PI / 2 + o.distance * o.curvature);
+      let a1 = (r > 0) ?
+        (-Math.PI / 2 + o.distance * o.curvature) :
+        (Math.PI / 2);
+      if (robotPose) {
+        center = {
+          x: robotPose.x - r * Math.sin(robotPose.theta),
+          y: robotPose.y + r * Math.cos(robotPose.theta)
+        };
+        a0 = angleMod(a0 + robotPose.theta);
+        a1 = angleMod(a1 + robotPose.theta);
+      }
+      // console.log(`${a0}, ${a1}`);
+      drawArc(color, center.x, center.y, Math.abs(r), a0, a1);
+      if (drawClearance) {
+        if (Math.abs(r) - o.clearance > 0) {
+          drawArc(color, center.x, center.y, Math.abs(r) - o.clearance, a0, a1);
+        }
+        drawArc(color, center.x, center.y, Math.abs(r) + o.clearance, a0, a1);
+      }
+    }
+
+    function drawPathOptions() {
+      if (visMsg === undefined) return;
+      visMsg.path_options.forEach(function (o) {
+        drawPathOption("#c0c0c0", o, false);
+      });
+      if (visMsg.path_options.length > 0) {
+        let bestOption = visMsg.path_options[visMsg.path_options.length - 1];
+        drawPathOption("#1000FF", bestOption, true);
+      }
+    }
+
+
+    function drawMarkerLineList(m) {
+      let individualColors = false;
+      if (m.points.length === m.colors.length) {
+        individualColors = true;
+      } else {
+        setColor(m.color);
+      }
+      let c = `rgb(${m.color.r * 255},${m.color.g * 255},${m.color.b * 255})`;
+      for (let i = 0; i < m.points.length; i += 2) {
+        let p0 = m.points[i];
+        let p1 = m.points[i + 1];
+        if (individualColors) {
+          c = `rgb(${m.colors[i].r * 255},${m.colors[i].g * 255},${m.colors[i].b * 255})`;
+        }
+        drawLine(c, p0.x, p0.y, p1.x, p1.y);
+      }
+    }
+
+    function drawLaserScan() {
+      if (!lastLaserScan) return;
+      let offset = { x: 0, y: 0, theta: 0 };
+      if (robotPose) {
+        // Note: Assumes the laser is at (0.2, 0) on the robot.
+        const laserOffset = 0.2;
+        offset = {
+          x: robotPose.x + laserOffset * Math.cos(robotPose.theta),
+          y: robotPose.y + laserOffset * Math.sin(robotPose.theta),
+          theta: robotPose.theta
+        };
+      }
+      // Update map and draw line being made.
+      // ctx.strokeStyle = 'rgba(82, 125, 232, 1)';
+      // ctx.lineWidth = 2;
+      const da = (lastLaserScan.angle_max - lastLaserScan.angle_min) /
+        lastLaserScan.ranges.length;
+      for (let i = 0; i < lastLaserScan.ranges.length; ++i) {
+        const r = lastLaserScan.ranges[i];
+        const a = lastLaserScan.angle_min + i * da + offset.theta;
+        const x = Math.cos(a) * r + offset.x;
+        const y = Math.sin(a) * r + offset.y;
+        drawPoint("#eb8334", x, y);
+      }
+    }
+
+    function drawGrid() {
+      const D = 50 * scale;
+      const d = 2 * scale;
+      ctx.strokeStyle = "#d1d1d1";
+      ctx.beginPath();
+      ctx.lineWidth = 1;
+      for (let i = -D; i < D; i += d) {
+        ctx.moveTo(i + origin.x, -D + origin.y);
+        ctx.lineTo(i + origin.x, D + origin.y);
+        ctx.moveTo(-D + origin.x, i + origin.y);
+        ctx.lineTo(D + origin.x, i + origin.y);
+      }
+      ctx.stroke();
+
+      ctx.lineWidth = 4;
+      drawLine("#EF0000", 0, 0, 1.5, 0);
+      drawLine("#00AF00", 0, 0, 0, 1.5);
+    }
+  </script>
+</body>
+
+</html>
