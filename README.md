@@ -2,6 +2,9 @@
 
 A low-bandwidth websocket-based direct robot visualizer.
 
+[![Build Status](https://travis-ci.com/ut-amrl/webviz.svg?branch=master)](https://travis-ci.com/ut-amrl/webviz)
+
+
 ## Dependencies
 
 1. [ROS](http://wiki.ros.org/Installation/)
