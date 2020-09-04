@@ -21,7 +21,3 @@ build/CMakeLists.txt.copy: build CMakeLists.txt Makefile
 
 build:
 	mkdir -p build
-
-purge: clean cleanup_cache
-	rm -rf src/ut_automata
-
