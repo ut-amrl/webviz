@@ -31,8 +31,8 @@
 
 #include "amrl_msgs/VisualizationMsg.h"
 #include "amrl_msgs/Localization2DMsg.h"
-#include "shared/math/math_util.h"
-#include "shared/util/timer.h"
+#include "math/math_util.h"
+#include "util/timer.h"
 #include "websocket.h"
 
 using amrl_msgs::VisualizationMsg;
