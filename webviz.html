@@ -57,6 +57,7 @@
     <option value="GDC3">GDC3</option>
     <option value="EmptyMap">EmptyMap</option>
     <option value="UT_Campus">UT_Campus</option>
+    <option value="UT_Campus_With_Stairs">UT_Campus_With_Stairs</option>
   </select>
   <br>
   <canvas id="canvas" width="800" height="600" tabindex="0"> </canvas>
@@ -172,7 +173,7 @@
         this.header.laser_max_angle = this.readFloat32();
         this.header.robot_pose = this.readPose();
         this.header.map = '';
-        for (let i = 0; i < 16; ++i) {
+        for (let i = 0; i < 32; ++i) {
           const c = this.readUint8();
           if (c > 0) {
             this.header.map += String.fromCharCode(c);
