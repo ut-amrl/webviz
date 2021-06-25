@@ -55,13 +55,13 @@ struct MessageHeader {
   float loc_x;                    // 11
   float loc_y;                    // 12
   float loc_r;                    // 13
-  char map[32];                   // 14-45
+  char map[32];                   //
   size_t GetByteLength() const {
     const size_t len = 13 * 4 + 32 +
-        num_points * 3 * 4 +        // x, y, color
-        num_lines * 5 * 4 +         // x1, y1, x2, y2, color
-        num_arcs * 6 * 4 +          // x, y, radius, start_angle, end_angle, color
-        num_laser_rays * 4;         // each ray is uint32_t
+        num_laser_rays * 4 +   // each ray is uint32_t
+        num_points * 3 * 4 +   // x, y, color
+        num_lines * 5 * 4 +    // x1, y1, x2, y2, color
+        num_arcs * 6 * 4;      // x, y, radius, start_angle, end_angle, color
     return len;
   }
 };

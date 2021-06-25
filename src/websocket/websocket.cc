@@ -191,6 +191,7 @@ DataMessage DataMessage::FromRosMessages(
       const VisualizationMsg& local_msg,
       const VisualizationMsg& global_msg,
       const Localization2DMsg& localization_msg) {
+  static const bool kDebug = false;
   DataMessage msg;
   for (size_t i = 0; i < sizeof(msg.header.map); ++i) {
     msg.header.map[i] = 0;
@@ -206,7 +207,12 @@ DataMessage DataMessage::FromRosMessages(
   msg.header.num_laser_rays = laser_msg.ranges.size();
   msg.laser_scan.resize(laser_msg.ranges.size());
   for (size_t i = 0; i < laser_msg.ranges.size(); ++i) {
-    msg.laser_scan[i] = static_cast<uint32_t>(laser_msg.ranges[i] * 1000.0);
+    if (laser_msg.ranges[i] <= laser_msg.range_min || 
+        laser_msg.ranges[i] >= laser_msg.range_max) {
+      msg.laser_scan[i] = 0;
+    } else {
+      msg.laser_scan[i] = static_cast<uint32_t>(laser_msg.ranges[i] * 1000.0);
+    }
   }
 
   msg.points = local_msg.points;
@@ -230,6 +236,25 @@ DataMessage DataMessage::FromRosMessages(
   msg.header.num_points = msg.points.size();
   msg.header.num_lines = msg.lines.size();
   msg.header.num_arcs = msg.arcs.size();
+
+  if (kDebug) {
+    printf("nonce: %d "
+           "num_points: %d "
+           "num_lines: %d "
+           "num_arcs: %d "
+           "num_laser_rays: %d "
+           "num_local_points: %d "
+           "num_local_lines: %d "
+           "num_local_arcs: %d\n",
+           msg.header.nonce,
+           msg.header.num_points,
+           msg.header.num_lines,
+           msg.header.num_arcs,
+           msg.header.num_laser_rays,
+           msg.header.num_local_points,
+           msg.header.num_local_lines,
+           msg.header.num_local_arcs);
+  }
   return msg;
 }
 
