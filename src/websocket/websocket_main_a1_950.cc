@@ -202,7 +202,7 @@ void *RosThread(void *arg) {
   ros::Subscriber localization_sub =
       n.subscribe("/localization", 10, &LocalizationCallback);
   init_loc_pub_ =
-      n.advertise<geometry_msgs::PoseWithCovarianceStamped>("/initialpose_a1", 10);
+      n.advertise<geometry_msgs::PoseWithCovarianceStamped>("/initialpose_a1_950", 10);
   nav_goal_pub_ =
       n.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 10);
   amrl_init_loc_pub_ = 
