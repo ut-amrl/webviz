@@ -58,8 +58,11 @@
     <option value="AHG1">AHG1</option>
     <option value="AHG2">AHG2</option>
     <option value="AHGM">AHGM</option>
+    <option value="AHGHallway">AHGHallway</option>
     <option value="EmptyMap">EmptyMap</option>
     <option value="UT_Campus">UT_Campus</option>
+    <option value="ASE1">ASE1</option>
+    <option value="ASE4">ASE4</option>
     <option value="UT_Campus_With_Stairs">UT_Campus_With_Stairs</option>
   </select>
   <br>
@@ -176,10 +179,15 @@
         this.header.laser_max_angle = this.readFloat32();
         this.header.robot_pose = this.readPose();
         this.header.map = '';
+        let end_of_string = false;
         for (let i = 0; i < 32; ++i) {
           const c = this.readUint8();
-          if (c > 0) {
-            this.header.map += String.fromCharCode(c);
+          if (!end_of_string) {
+            if (c === 0) {
+              end_of_string = true;
+            } else {
+              this.header.map += String.fromCharCode(c);
+            }
           }
         }
         return this.header;
@@ -871,6 +879,7 @@
         lastLaserScan.ranges.length;
       for (let i = 0; i < lastLaserScan.ranges.length; ++i) {
         const r = lastLaserScan.ranges[i];
+        if (r === 0) continue;
         const a = lastLaserScan.angle_min + i * da + offset.theta;
         const x = Math.cos(a) * r + offset.x;
         const y = Math.sin(a) * r + offset.y;
