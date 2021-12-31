@@ -57,13 +57,15 @@
     <option value="GDC3">GDC3</option>
     <option value="AHG1">AHG1</option>
     <option value="AHG2">AHG2</option>
+    <option value="AHG2_Track">AHG2_Track</option>
+    <option value="Slalom_Course">Slalom_Course</option>
+    <option value="UT_AUTOmata_Track">UT_AUTOmata_Track</option>
     <option value="AHGM">AHGM</option>
     <option value="AHGHallway">AHGHallway</option>
-    <option value="EmptyMap">EmptyMap</option>
     <option value="UT_Campus">UT_Campus</option>
     <option value="ASE1">ASE1</option>
     <option value="ASE4">ASE4</option>
-    <option value="UT_Campus_With_Stairs">UT_Campus_With_Stairs</option>
+    <option value="EmptyMap">EmptyMap</option>
   </select>
   <br>
   <canvas id="canvas" width="800" height="600" tabindex="0"> </canvas>
@@ -227,10 +229,16 @@
 
       readColor() {
         const c = this.readUint32();
+        const a = Math.abs((c & 0xFF000000) >> 24);
         const r = (c & 0xFF0000) >> 16;
         const g = (c & 0xFF00) >> 8;
         const b = c & 0xFF;
-        return `rgb(${r},${g},${b})`;
+        if (a > 0) {
+          return `rgba(${r},${g},${b},${a / 255})`;
+        } else {
+          return `rgb(${r},${g},${b})`;
+        }
+        
       }
 
       readPoint2D() {
@@ -409,12 +417,15 @@
       }
       if (!found) {
         let opt = document.createElement('option');
-        opt.appendChild(document.createTextNode(mapName));
+        // opt.appendChild(document.createTextNode(mapName));
         opt.value = mapName;
-        mapList.appendChild(mapName);
+        opt.innerHTML = mapName;
+        mapList.appendChild(opt);
         mapList.selectedIndex = mapList.options.length - 1;
       }
       let url = `https://amrl.cs.utexas.edu/amrl_maps/${mapName}/${mapName}.vectormap.json`;
+      // for other branches:
+      // let url = `https://raw.githubusercontent.com/ut-amrl/amrl_maps/${branchName}/${mapName}/${mapName}.vectormap.json`;
       console.log(`Loading "${url}"`);
       var xhr = new XMLHttpRequest();
       // xhr.responseType = 'json';
