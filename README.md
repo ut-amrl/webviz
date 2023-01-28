@@ -20,7 +20,7 @@ A low-bandwidth websocket-based direct robot visualizer.
     ```
     export ROS_PACKAGE_PATH=`pwd`:$ROS_PACKAGE_PATH
     ```
-1. Run git submodule update --init --recursive to pull all the submodules.
+1. Run `git submodule update --init --recursive` to pull all the submodules.
 
 1. Run `make`.
 
