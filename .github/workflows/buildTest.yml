@@ -27,6 +27,13 @@ jobs:
         run: |
           sudo apt-get install -y git qt5-default libqt5websockets5-dev
 
+      # Rosdep
+      - name: ROSDep Update
+        run: |
+          sudo apt install python3-rosdep python3-rosinstall python3-rosinstall-generator python3-wstool build-essential
+          sudo rosdep init
+          rosdep update
+
       # Checks out a copy of your repository
       - name: Checkout code
         uses: actions/checkout@v2
