@@ -25,7 +25,7 @@ jobs:
       # Install dependencies
       - name: Install dependencies
         run: |
-          sudo apt-get install -y git qt5-default libqt5websockets5-dev ros-noetic-angles ros-noetic-desktop
+          sudo apt-get install -y git qt5-default libqt5websockets5-dev ros-noetic-angles ros-noetic-tf
 
       # Rosdep
       - name: ROSDep Update
