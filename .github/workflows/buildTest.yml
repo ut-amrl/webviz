@@ -25,7 +25,7 @@ jobs:
       # Install dependencies
       - name: Install dependencies
         run: |
-          sudo apt-get install -y git qt5-default libqt5websockets5-dev ros-noetic-angles ros-noetic-tf python-is-python3
+          sudo apt-get install -y git qt5-default libqt5websockets5-dev ros-noetic-angles ros-noetic-tf python-is-python3 libgtest-dev libgoogle-glog-dev cmake build-essential
 
       # Rosdep
       - name: ROSDep Update
