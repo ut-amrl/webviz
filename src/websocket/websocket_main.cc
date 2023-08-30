@@ -173,6 +173,7 @@ void SetNavGoal(float x, float y, float theta, QString map) {
         map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
   }
   nav_goal_msg_.header.stamp = ros::Time::now();
+  nav_goal_msg_.header.frame_id = "map";
   nav_goal_msg_.pose.position.x = x;
   nav_goal_msg_.pose.position.y = y;
   nav_goal_msg_.pose.orientation.w = cos(0.5 * theta);
