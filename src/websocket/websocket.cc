@@ -348,6 +348,15 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
                      json.value("y").toDouble(),
                      json.value("theta").toDouble(),
                      json.value("map").toString());
+  } else if (type == "set_waypoints") {
+    if (!AllNumericalKeysPresent({"x", "y", "theta"}, json) ||
+        !StringKeyPresent("map", json)) {
+      SendError("Invalid set_waypoints parameters");
+    }
+    SetWaypointsSignal(json.value("x").toDouble(),
+                     json.value("y").toDouble(),
+                     json.value("theta").toDouble(),
+                     json.value("map").toString());
   } else if (type == "reset_nav_goals") {
     ResetNavGoalsSignal();
   } else {

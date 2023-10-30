@@ -52,6 +52,7 @@ geometry_msgs::PoseWithCovarianceStamped initial_pose_msg_;
 geometry_msgs::PoseStamped nav_goal_msg_;
 amrl_msgs::Localization2DMsg amrl_initial_pose_msg_;
 amrl_msgs::Localization2DMsg amrl_nav_goal_msg_;
+amrl_msgs::Localization2DMsg amrl_waypoint_msg_;
 std_msgs::Empty reset_nav_goals_msg_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
@@ -59,6 +60,7 @@ ros::Publisher init_loc_pub_;
 ros::Publisher amrl_init_loc_pub_;
 ros::Publisher nav_goal_pub_;
 ros::Publisher amrl_nav_goal_pub_;
+ros::Publisher amrl_waypoint_pub_;
 ros::Publisher reset_nav_goals_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
@@ -198,6 +200,19 @@ void SetNavGoal(float x, float y, float theta, QString map) {
   amrl_nav_goal_pub_.publish(amrl_nav_goal_msg_);
 }
 
+void SetWaypoint(float x, float y, float theta, QString map){
+  if (FLAGS_v > 0) {
+    printf("Set waypoint: %s %f,%f, %f\n",
+        map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
+  }
+  amrl_waypoint_msg_.header.stamp = ros::Time::now();
+  amrl_waypoint_msg_.map = map.toStdString();
+  amrl_waypoint_msg_.pose.x = x;
+  amrl_waypoint_msg_.pose.y = y;
+  amrl_waypoint_msg_.pose.theta = theta;
+  amrl_waypoint_pub_.publish(amrl_waypoint_msg_);
+}
+
 void *RosThread(void *arg) {
   pthread_detach(pthread_self());
   CHECK_NOTNULL(server_);
@@ -205,6 +220,8 @@ void *RosThread(void *arg) {
       server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
   QObject::connect(
       server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
+  QObject::connect(
+      server_, &RobotWebSocket::SetWaypointsSignal, &SetWaypoint);
   QObject::connect(
       server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
 
@@ -223,6 +240,8 @@ void *RosThread(void *arg) {
       n.advertise<amrl_msgs::Localization2DMsg>("/set_pose", 10);
   amrl_nav_goal_pub_ =
       n.advertise<amrl_msgs::Localization2DMsg>("/set_nav_target", 10);
+  amrl_waypoint_pub_ =
+      n.advertise<amrl_msgs::Localization2DMsg>("/set_waypoint", 10);
   reset_nav_goals_pub_ =
       n.advertise<std_msgs::Empty>("/reset_nav_goals", 10);
 
