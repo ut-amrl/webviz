@@ -107,6 +107,7 @@ Q_SIGNALS:
   void SendDataSignal();
   void SetInitialPoseSignal(float x, float y, float theta, QString map);
   void SetNavGoalSignal(float x, float y, float theta, QString map);
+  void ResetNavGoalsSignal();
 
 private Q_SLOTS:
   void onNewConnection();

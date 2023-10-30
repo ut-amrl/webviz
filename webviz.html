@@ -46,6 +46,7 @@
   Status: <label id="status">Disconnected</label><br>
   <input type="button" id="setLocation" onclick="setLocationButton()" value="Set Pose">
   <input type="button" id="setNavGoal" onclick="setNavGoalButton()" value="Set Nav Target">
+  <input type="button" id="resetNav" onclick="resetNavButton()" value="Reset nav" />
   Map:
   <select id="map" value="GDC1" onchange="changeMap()">
     <option value="GDC1">GDC1</option>
@@ -470,6 +471,35 @@
       setLocation = false;
       setNavGoal = true;
       document.getElementById("setNavGoal").style = "border-style:inset;";
+    }
+
+    function resetNavButton() {
+      // if (robotPose !== undefined) {
+      //   // Extract the current robot position from robotPose
+      //   const x = robotPose.x;
+      //   const y = robotPose.y;
+      //   const theta = robotPose.theta;
+
+      //   if (robot_interface.socket) {
+      //     robot_interface.socket.send(JSON.stringify({
+      //       type: "set_nav_goal",
+      //       x: x,
+      //       y: y,
+      //       theta: theta
+      //     }));
+      //   } else {
+      //     console.error('Error: not connected');
+      //   }
+      // } else {
+      //   console.error('Error: robotPose is undefined');
+      // }
+      if (!robot_interface.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        robot_interface.socket.send(JSON.stringify({
+          type: "reset_nav_goals"
+        }));
     }
 
     // Get the "true" mouse location, compensting for scroll, zoom, etc.
