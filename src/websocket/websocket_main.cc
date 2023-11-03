@@ -24,6 +24,7 @@
 
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseWithCovarianceStamped.h"
+#include "std_msgs/Empty.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include "ros/ros.h"
@@ -51,12 +52,14 @@ geometry_msgs::PoseWithCovarianceStamped initial_pose_msg_;
 geometry_msgs::PoseStamped nav_goal_msg_;
 amrl_msgs::Localization2DMsg amrl_initial_pose_msg_;
 amrl_msgs::Localization2DMsg amrl_nav_goal_msg_;
+std_msgs::Empty reset_nav_goals_msg_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
 ros::Publisher init_loc_pub_;
 ros::Publisher amrl_init_loc_pub_;
 ros::Publisher nav_goal_pub_;
 ros::Publisher amrl_nav_goal_pub_;
+ros::Publisher reset_nav_goals_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
 }  // namespace
@@ -169,6 +172,13 @@ void SetInitialPose(float x, float y, float theta, QString map) {
   amrl_init_loc_pub_.publish(amrl_initial_pose_msg_);
 }
 
+void ResetNavGoals() {
+  if (FLAGS_v > 0) {
+    printf("Reset nav goals.\n");
+  }
+  reset_nav_goals_pub_.publish(reset_nav_goals_msg_);
+}
+
 void SetNavGoal(float x, float y, float theta, QString map) {
   if (FLAGS_v > 0) {
     printf("Set nav goal: %s %f,%f, %f\n",
@@ -195,6 +205,8 @@ void *RosThread(void *arg) {
       server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
   QObject::connect(
       server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
+  QObject::connect(
+      server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
 
   ros::NodeHandle n;
   ros::Subscriber laser_sub =
@@ -211,6 +223,8 @@ void *RosThread(void *arg) {
       n.advertise<amrl_msgs::Localization2DMsg>("/set_pose", 10);
   amrl_nav_goal_pub_ =
       n.advertise<amrl_msgs::Localization2DMsg>("/set_nav_target", 10);
+  reset_nav_goals_pub_ =
+      n.advertise<std_msgs::Empty>("/reset_nav_goals", 10);
 
   RateLoop loop(FLAGS_fps);
   while (ros::ok() && run_) {

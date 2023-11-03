@@ -417,6 +417,18 @@
         }));
       }
 
+      // Reset all navgoals and waypoints.
+      resetNavGoals() {
+        this.waypoints = [];
+        if (!this.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        this.socket.send(JSON.stringify({
+          type: "reset_nav_goals"
+        }));
+      }
+
       // Send waypoint.
       async gotoWaypoint(idx) {
         this.setNavGoal(this.waypoints[idx][0], this.waypoints[idx][1], this.waypoints[idx][2]);
@@ -546,11 +558,10 @@
         resetNavGoals = true;
         setWaypoints = false;
         mouseDown = false;
-        robot_interface.waypoints = [];
         document.getElementById("setLocation").style = "";
         document.getElementById("setNavGoal").style = "";
         document.getElementById("setWaypoints").style = "";
-        robot_interface.setNavGoal(1111, 1111, 1111);  // all 1111 -> indicates reset of nav goals
+        robot_interface.resetNavGoals();
         document.getElementById("resetNav").style = "border-style:inset;";
       } else {
         resetNavGoals = false;
