@@ -46,6 +46,8 @@
   Status: <label id="status">Disconnected</label><br>
   <input type="button" id="setLocation" onclick="setLocationButton()" value="Set Pose">
   <input type="button" id="setNavGoal" onclick="setNavGoalButton()" value="Set Nav Target">
+  <input type="button" id="setWaypoints" onclick="setWaypointsButton()" value="Set Waypoints">
+  <input type="button" id="resetNav" onclick="resetNavButton()" value="Reset Nav" />
   Map:
   <select id="map" value="GDC1" onchange="changeMap()">
     <option value="GDC1">GDC1</option>
@@ -85,6 +87,8 @@
     var mouseDown = false;
     var setLocation = false;
     var setNavGoal = false;
+    var setWaypoints = false;
+    var resetNavGoals = false;
     var coords = document.getElementById("coords");
     var mapList = document.getElementById("map");
     var robotPose = undefined;
@@ -177,7 +181,7 @@
         let end_of_str = false;
         for (let i = 0; i < 32; i++) {
           const c = this.readUint8();
-          if(c==0 || end_of_str) {
+          if (c == 0 || end_of_str) {
             end_of_str = true;
           } else {
             s += String.fromCharCode(c)
@@ -309,6 +313,7 @@
       // Constructor: set up callbacks.
       constructor() {
         this.socket = null;
+        this.waypoints = []; // list of tuples (x, y, theta) waypoints
         // Set up callbacks.
         this.callbacks = {
           onopen: null,
@@ -412,6 +417,46 @@
         }));
       }
 
+      // Reset all navgoals and waypoints.
+      resetNavGoals() {
+        this.waypoints = [];
+        if (!this.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        this.socket.send(JSON.stringify({
+          type: "reset_nav_goals"
+        }));
+      }
+
+      // Send waypoint.
+      async gotoWaypoint(idx) {
+        this.setNavGoal(this.waypoints[idx][0], this.waypoints[idx][1], this.waypoints[idx][2]);
+        while (true) {
+          if (resetNavGoals) {
+            break;
+          }
+          if (comparePoses([robotPose.x, robotPose.y, robotPose.theta], this.waypoints[idx])) {
+            console.log('Reached the waypoint');
+            break; // Exit the loop if the robot has reached the waypoint.
+          }
+          await new Promise(resolve => setTimeout(resolve, 100)); // Wait for 100 ms.
+        }
+      }
+
+      async gotoWaypoints() {
+        for (let i = 0; i < this.waypoints.length; i++) {
+          if (resetNavGoals) {
+            break;
+          }
+          await this.gotoWaypoint(i);
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait for 10 seconds.
+          if (i == this.waypoints.length - 1) {
+            i = -1;
+          }
+        }
+      }
+
       close() {
         if (!this.socket) return;
         this.socket.close();
@@ -460,16 +505,68 @@
       xhr.send();
     }
 
+    function comparePoses(pose1, pose2) {
+      const [x1, y1, theta1] = pose1;
+      const [x2, y2, theta2] = pose2;
+      const positionThreshold = 0.1;
+      const orientationThreshold = 0.05;
+
+      return (
+        Math.abs(x1 - x2) < positionThreshold &&
+        Math.abs(y1 - y2) < positionThreshold &&
+        Math.abs(theta1 - theta2) < orientationThreshold
+      );
+    }
+
     function setLocationButton() {
       setLocation = true;
       setNavGoal = false;
+      resetNavGoals = false;
+      setWaypoints = false;
+      document.getElementById("resetNav").style = "";
       document.getElementById("setLocation").style = "border-style:inset;";
     }
 
     function setNavGoalButton() {
       setLocation = false;
       setNavGoal = true;
+      resetNavGoals = false;
+      setWaypoints = false;
+      document.getElementById("resetNav").style = "";
       document.getElementById("setNavGoal").style = "border-style:inset;";
+    }
+
+    function setWaypointsButton() {
+      if (!setWaypoints) {
+        setLocation = false;
+        setNavGoal = false;
+        resetNavGoals = false;
+        setWaypoints = true;
+        document.getElementById("resetNav").style = "";
+        document.getElementById("setWaypoints").style = "border-style:inset;";
+      } else {
+        setWaypoints = false;
+        document.getElementById("setWaypoints").style = "";
+        robot_interface.gotoWaypoints();
+      }
+    }
+
+    function resetNavButton() {
+      if (!resetNavGoals) {
+        setNavGoal = false;
+        setLocation = false;
+        resetNavGoals = true;
+        setWaypoints = false;
+        mouseDown = false;
+        document.getElementById("setLocation").style = "";
+        document.getElementById("setNavGoal").style = "";
+        document.getElementById("setWaypoints").style = "";
+        robot_interface.resetNavGoals();
+        document.getElementById("resetNav").style = "border-style:inset;";
+      } else {
+        resetNavGoals = false;
+        document.getElementById("resetNav").style = "";
+      }
     }
 
     // Get the "true" mouse location, compensting for scroll, zoom, etc.
@@ -516,7 +613,7 @@
       const y_str = w.y.toFixed(3);
       coords.innerHTML = `x=${x_str}, y=${y_str}`;
       if (!mouseDown) return;
-      if (setLocation || setNavGoal) return;
+      if (setLocation || setNavGoal || setWaypoints) return;
       origin.x = prev_origin.x + curMouseLoc.x - mouseDownLoc.x;
       origin.y = prev_origin.y + curMouseLoc.y - mouseDownLoc.y;
     };
@@ -548,6 +645,13 @@
           let w0 = canvasToWorld(mouseDownLoc);
           let a = Math.atan2(mouseDownLoc.y - loc.y, loc.x - mouseDownLoc.x);
           robot_interface.setInitialPose(w0.x, w0.y, a);
+        }
+      } else if (setWaypoints) {
+        // Set waypoints here.
+        if (robot_interface) {
+          let w0 = canvasToWorld(mouseDownLoc);
+          let a = Math.atan2(mouseDownLoc.y - loc.y, loc.x - mouseDownLoc.x);
+          robot_interface.waypoints.push([w0.x, w0.y, a]);
         }
       } else {
         // Pan.
@@ -600,10 +704,10 @@
     }
 
     function drawTextAnnotation(text, x, y, color, size_em) {
-      ctx.font = `${Math.round(size_em*12)}pt Arial`;
+      ctx.font = `${Math.round(size_em * 12)}pt Arial`;
       ctx.fillStyle = color;
       ctx.strokeStyle = color;
-      const p = worldToCanvas({x: x, y: y})
+      const p = worldToCanvas({ x: x, y: y })
       ctx.fillText(text, p.x, p.y);
     }
 
@@ -792,7 +896,7 @@
       if (visMsg == undefined) return;
       visMsg.textAnnotations.forEach(function (m, i) {
         let p = m.start;
-        if(i < visMsg.header.num_local_text_annotations) {
+        if (i < visMsg.header.num_local_text_annotations) {
           p = robotToMap(p);
         }
         drawTextAnnotation(m.str, p.x, p.y, m.color, m.size_em);

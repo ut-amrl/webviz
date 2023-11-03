@@ -348,6 +348,8 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
                      json.value("y").toDouble(),
                      json.value("theta").toDouble(),
                      json.value("map").toString());
+  } else if (type == "reset_nav_goals") {
+    ResetNavGoalsSignal();
   } else {
     SendError("Unrecognized request type");
   }
