@@ -431,6 +431,7 @@
 
       // Send waypoint.
       async gotoWaypoint(idx) {
+        console.log(`%cEntered gotoWaypoint for index ${idx}`, 'color: blue;');
         this.setNavGoal(this.waypoints[idx][0], this.waypoints[idx][1], this.waypoints[idx][2]);
         while (true) {
           if (resetNavGoals) {
@@ -445,13 +446,16 @@
       }
 
       async gotoWaypoints() {
+        console.log('%cEntered gotoWaypoints', 'color: green; font-weight: bold;');
         for (let i = 0; i < this.waypoints.length; i++) {
+          await this.gotoWaypoint(i);
           if (resetNavGoals) {
             break;
           }
-          await this.gotoWaypoint(i);
-          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait for 10 seconds.
+          console.log(`%cAwaiting 15 seconds at waypoint ${i}`, 'color: gray;');
+          await new Promise(resolve => setTimeout(resolve, 15000)); // Wait for 15 seconds.
           if (i == this.waypoints.length - 1) {
+            console.log('%cLooping to start of waypoints array', 'color: pink; font-weight: bold;');
             i = -1;
           }
         }
@@ -508,14 +512,14 @@
     function comparePoses(pose1, pose2) {
       const [x1, y1, theta1] = pose1;
       const [x2, y2, theta2] = pose2;
-      const positionThreshold = 0.1;
-      const orientationThreshold = 0.05;
+      const positionThreshold = 0.7;
+      const orientationThreshold = 3.0;
 
-      return (
-        Math.abs(x1 - x2) < positionThreshold &&
-        Math.abs(y1 - y2) < positionThreshold &&
-        Math.abs(theta1 - theta2) < orientationThreshold
-      );
+      x_ = Math.abs(x1 - x2);
+      y_ = Math.abs(y1 - y2);
+      theta_ = Math.abs(theta1 - theta2);
+      // console.log(`%cx_: ${x_}, y_: ${y_}, theta_: ${theta_}`, 'color: gray;');
+      return (x_ < positionThreshold && y_ < positionThreshold && theta_ < orientationThreshold);
     }
 
     function setLocationButton() {
