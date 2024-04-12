@@ -1,0 +1,60 @@
+name: Build-Test
+# Run this workflow every time a new commit pushed to your repository
+on: push
+
+jobs:
+  # Set the job key. The key is displayed as the job name
+  # when a job name is not provided
+  build-test:
+    # Name the Job
+    name: Build test
+    # Set the type of machine to run on
+    runs-on: ubuntu-20.04
+    defaults:
+      run:
+        shell: bash -l {0}
+    container: ros:noetic
+
+    steps:
+      # Run package update
+      - name: Run package update
+        run: |
+          sudo apt update
+          sudo apt dist-upgrade -y
+
+      # Install dependencies
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y git qt5-default libqt5websockets5-dev ros-noetic-angles ros-noetic-tf python-is-python3 libgtest-dev libgoogle-glog-dev cmake build-essential
+
+      # Rosdep
+      - name: ROSDep Update
+        run: |
+          sudo apt install python3-rosdep python3-rosinstall python3-rosinstall-generator python3-wstool build-essential
+          sudo rosdep init
+          rosdep update
+
+      # Checks out a copy of your repository
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          submodules: 'recursive'
+
+
+      # Checkout and build amrl_msgs
+      - name: Get amrl_msgs
+        run: |
+          source /opt/ros/noetic/setup.bash
+          export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/../amrl_msgs
+          cd $GITHUB_WORKSPACE/..
+          git clone https://github.com/ut-amrl/amrl_msgs.git
+          cd amrl_msgs
+          make
+
+      # Compiles the code
+      - name: Run build
+        run: |
+          source /opt/ros/noetic/setup.bash
+          export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/../amrl_msgs:$GITHUB_WORKSPACE/../amrl_maps
+          cd $GITHUB_WORKSPACE
+          make
