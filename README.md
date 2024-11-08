@@ -8,7 +8,7 @@ A low-bandwidth websocket-based direct robot visualizer.
 ## Dependencies
 
 1. [ROS](http://wiki.ros.org/Installation/)
-1. [AMRL ROS Messages](https://github.com/ut-amrl/amrl_msgs)
+1. [AMRL ROS Messages](https://github.com/ut-amrl/amrl_msgs/tree/a2414dd86b08fea32b982478a9f5945c72fe2c46)
 1. QT5 and QT5 WebSockets
     ```
     sudo apt install qt5-default libqt5websockets5-dev

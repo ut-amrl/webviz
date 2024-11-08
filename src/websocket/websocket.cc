@@ -68,7 +68,7 @@ RobotWebSocket::RobotWebSocket(uint16_t port)
   localization_.pose.x = 0;
   localization_.pose.y = 0;
   localization_.pose.theta = 0;
-  gps_pose_.data = {30.2861, -97.7394, 0};  // UT Austin
+  gps_pose_.data = {0, 30.2861, -97.7394, 0, 0};  // UT Austin
   connect(this, &RobotWebSocket::SendDataSignal, this,
           &RobotWebSocket::SendDataSlot);
   if (ws_server_->listen(QHostAddress::Any, port)) {
@@ -189,7 +189,8 @@ QByteArray DataMessage::ToByteArray() const {
 }
 
 DataMessage DataMessage::FromRosMessages(
-    const LaserScan& laser_msg, const VisualizationMsg& local_msg,
+    const LaserScan& laser_msg, const LaserScan& laser_lowbeam_msg, 
+    const VisualizationMsg& local_msg,
     const VisualizationMsg& global_msg,
     const Localization2DMsg& localization_msg,
     const Float64MultiArray& gps_msg) {
@@ -201,21 +202,32 @@ DataMessage DataMessage::FromRosMessages(
   msg.header.loc_x = localization_msg.pose.x;
   msg.header.loc_y = localization_msg.pose.y;
   msg.header.loc_r = localization_msg.pose.theta;
-  msg.header.lat = gps_msg.data[0];
-  msg.header.lng = gps_msg.data[1];
-  msg.header.heading = gps_msg.data[2];
+  msg.header.lat = gps_msg.data[1];
+  msg.header.lng = gps_msg.data[2];
+  msg.header.heading = gps_msg.data[4];
+  // printf("lat %lf lng %lf, heading %lf", msg.header.lat, msg.header.lng, msg.header.heading );
   strncpy(msg.header.map, localization_msg.map.data(),
           std::min(sizeof(msg.header.map) - 1, localization_msg.map.size()));
   msg.header.laser_min_angle = laser_msg.angle_min;
   msg.header.laser_max_angle = laser_msg.angle_max;
-  msg.header.num_laser_rays = laser_msg.ranges.size();
-  msg.laser_scan.resize(laser_msg.ranges.size());
+  msg.header.num_laser_rays = laser_msg.ranges.size() + laser_lowbeam_msg.ranges.size();
+  msg.laser_scan.resize(laser_msg.ranges.size() +
+                    laser_lowbeam_msg.ranges.size());
   for (size_t i = 0; i < laser_msg.ranges.size(); ++i) {
     if (laser_msg.ranges[i] <= laser_msg.range_min ||
         laser_msg.ranges[i] >= laser_msg.range_max) {
       msg.laser_scan[i] = 0;
     } else {
       msg.laser_scan[i] = static_cast<uint32_t>(laser_msg.ranges[i] * 1000.0);
+    }
+  }
+  for (size_t i = 0; i < laser_lowbeam_msg.ranges.size(); ++i) {
+    if (laser_lowbeam_msg.ranges[i] <= laser_lowbeam_msg.range_min ||
+        laser_lowbeam_msg.ranges[i] >= laser_lowbeam_msg.range_max) {
+      msg.laser_scan[i + laser_msg.ranges.size()] = 0;
+    } else {
+      msg.laser_scan[i + laser_msg.ranges.size()] =
+          static_cast<uint32_t>(laser_lowbeam_msg.ranges[i] * 1000.0);
     }
   }
   msg.points = local_msg.points;
@@ -330,6 +342,11 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
     SetNavGoalSignal(json.value("x").toDouble(), json.value("y").toDouble(),
                      json.value("theta").toDouble(),
                      json.value("map").toString());
+  } else if (type == "set_gps_goal") {
+    if (!AllNumericalKeysPresent({"lat", "lon"}, json)) {
+      SendError("Invalid set_gps_goal parameters");
+    }
+    SetGPSGoalSignal(json.value("lat").toDouble(), json.value("lon").toDouble());
   } else if (type == "reset_nav_goals") {
     ResetNavGoalsSignal();
   } else {
@@ -385,7 +402,7 @@ void RobotWebSocket::SendDataSlot() {
   if (clients_.empty()) return;
   data_mutex_.lock();
   const auto data = DataMessage::FromRosMessages(
-      laser_scan_, local_vis_, global_vis_, localization_, gps_pose_);
+      laser_scan_, laser_lowbeam_scan_, local_vis_, global_vis_, localization_, gps_pose_);
   const auto buffer = data.ToByteArray();
   CHECK_EQ(data.header.GetByteLength(), buffer.size());
   for (auto c : clients_) {
@@ -397,6 +414,7 @@ void RobotWebSocket::SendDataSlot() {
 void RobotWebSocket::Send(const VisualizationMsg& local_vis,
                           const VisualizationMsg& global_vis,
                           const LaserScan& laser_scan,
+                          const LaserScan& laser_lowbeam_scan,
                           const Localization2DMsg& localization,
                           const Float64MultiArray& gps_pose) {
   data_mutex_.lock();
@@ -404,6 +422,7 @@ void RobotWebSocket::Send(const VisualizationMsg& local_vis,
   local_vis_ = local_vis;
   global_vis_ = global_vis;
   laser_scan_ = laser_scan;
+  laser_lowbeam_scan_ = laser_lowbeam_scan;
   gps_pose_ = gps_pose;
   data_mutex_.unlock();
   SendDataSignal();

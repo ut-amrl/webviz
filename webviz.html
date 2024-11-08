@@ -61,6 +61,7 @@
   Status: <label id="status">Disconnected</label><br>
   <input type="button" id="setLocation" onclick="setLocationButton()" value="Set Pose">
   <input type="button" id="setNavGoal" onclick="setNavGoalButton()" value="Set Nav Target">
+  <input type="button" id="setGPSGoal" onclick="setGPSGoalButton()" value="Set GPS Target">
   <input type="button" id="setWaypoints" onclick="setWaypointsButton()" value="Set Waypoints">
   <input type="button" id="resetNav" onclick="resetNavButton()" value="Reset Nav" />
   Map:
@@ -92,6 +93,7 @@
   <script type="text/javascript" type="text/javascript">
     var canvas = document.getElementById("canvas");
     var visMsg = undefined;
+    var isDataUpdated = false; 
     var scale = 20;
     var origin = { x: 0.5 * canvas.width, y: 0.5 * canvas.height };
     var prev_origin = { x: 0, y: 0 };
@@ -102,6 +104,7 @@
     var curMouseLoc;
     var mouseDown = false;
     var setLocation = false;
+    var setGPSLocation = false;
     var setNavGoal = false;
     var setWaypoints = false;
     var resetNavGoals = false;
@@ -122,6 +125,17 @@
       maxZoom: 20,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(osm_map);
+
+    // Listen for clicks on the Leaflet map to get GPS coordinates
+    osm_map.on('click', function(e) {
+      const { lat, lng } = e.latlng; // Get the latitude and longitude of the click
+      if (setGPSLocation && robot_interface) {
+        console.log("Clicked GPS location:", lat, lng);
+        robot_interface.setGPSGoal(lat, lng);
+        setGPSLocation = false;
+        document.getElementById("setGPSGoal").style = ""; // Reset the button style
+      }
+    });
 
     try {
       if (window.localStorage.getItem('ipaddr')) {
@@ -246,9 +260,9 @@
           lng: 0,
           heading: 0
         };
-        gps.lat = this.readFloat64();
-        gps.lng = this.readFloat64();
-        gps.heading = this.readFloat64();
+        gps.lat = this.readFloat32();
+        gps.lng = this.readFloat32();
+        gps.heading = this.readFloat32();
         return gps;
       }
 
@@ -457,8 +471,7 @@
         this.socket.send(JSON.stringify({
           type: "set_gps_goal",
           lat: lat,
-          lon: lon,
-          map: currentMapName
+          lon: lon
         }));
       }
 
@@ -598,6 +611,15 @@
       setWaypoints = false;
       document.getElementById("resetNav").style = "";
       document.getElementById("setNavGoal").style = "border-style:inset;";
+    }
+
+    function setGPSGoalButton() {
+      setLocation = false;
+      setGPSLocation = true;
+      resetNavGoals = false;
+      setWaypoints = false;
+      document.getElementById("resetNav").style = "";
+      document.getElementById("setGPSGoal").style = "border-style:inset;";
     }
 
     function setWaypointsButton() {
@@ -785,6 +807,7 @@
       lastLaserScan = d.laser;
       robotPose = d.robotPose;
       robotGPS = d.robotGPS;
+      isDataUpdated = true;
     }
 
     function processJsonData(json) {
@@ -885,26 +908,36 @@
       drawLine(kPoseColor, p3.x, p3.y, p1.x, p1.y);
     }
 
-    // Simulate receiving data periodically (replace with actual data updates)
-    // setInterval(() => {
-    //   const simulatedData = { robot_gps: { lat: 30.285949 + Math.random() * 0.0001, lng: -97.737157 + Math.random() * 0.0001, heading: 0 } };
-    //   addGPSPoint(simulatedData.robot_gps);
-    // }, 2000);
-
     // Function to add a new GPS point to the map with orientation
-    function addGPSPoint(gps_pose) {
+    const gpsMarkers = [];
+    function drawGPS(gps_pose) {
+      // Destructure gps_pose dictionary
       const { lat, lng, heading } = gps_pose;
-      const icon = createArrowIcon(heading); // Create an icon based on the heading
 
-      // Add a new marker for each GPS point with orientation
-      L.marker([lat, lng], { icon }).addTo(osm_map);
+      // Create an icon based on the heading
+      const icon = createArrowIcon(heading);
+
+      // If there are already 10 markers, remove the oldest one
+      if (gpsMarkers.length >= 10) {
+          const oldestMarker = gpsMarkers.shift();
+          osm_map.removeLayer(oldestMarker);
+      }
+
+      // Add a new marker for the current GPS point
+      const newMarker = L.marker([lat, lng], { icon }).addTo(osm_map);
+
+      // Store the new marker in the array
+      gpsMarkers.push(newMarker);
+
+      // Pan the map to the latest GPS point
       osm_map.panTo([lat, lng]);
     }
 
     // Function to create an arrow icon with the given heading
     function createArrowIcon(heading) {
       // Adjust heading by -90 degrees to align 0 degrees to north
-      const rotation = (heading + Math.PI / 2) * (180 / Math.PI); // Convert radians to degrees
+      // const rotation = (heading) * (180.0 / Math.PI); // Convert radians to degrees
+      const rotation = heading; // Already in degrees
 
       const svgIcon = `
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -924,6 +957,8 @@
       const kDrawInterval = 0.03;
       const tNow = window.performance.now();
       if (tNow - tLastDraw < kDrawInterval) return;
+      if (!isDataUpdated) return;
+      isDataUpdated = false;
       tLastDraw = tNow;
       // Clear canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -946,7 +981,7 @@
         drawLine("#000000", p0.x, p0.y, p1.x, p1.y);
       }
       if (visMsg) drawPose(visMsg.header.robot_pose, 'rgb(0, 150, 0)');
-      if (visMsg) drawGPSPoint(visMsg.header.robot_gps);
+      if (visMsg) drawGPS(visMsg.header.robot_gps);
     }
 
     function setColor(c) {
@@ -1136,12 +1171,14 @@
       // Update map and draw line being made.
       // ctx.strokeStyle = 'rgba(82, 125, 232, 1)';
       // ctx.lineWidth = 2;
+      const num_lidars = 2;
       const da = (lastLaserScan.angle_max - lastLaserScan.angle_min) /
-        lastLaserScan.ranges.length;
+        (lastLaserScan.ranges.length / num_lidars) // 2;
       for (let i = 0; i < lastLaserScan.ranges.length; ++i) {
+        angle_idx = i % (lastLaserScan.ranges.length / num_lidars);
         const r = lastLaserScan.ranges[i];
         if (r === 0) continue;
-        const a = lastLaserScan.angle_min + i * da + offset.theta;
+        const a = lastLaserScan.angle_min + angle_idx * da + offset.theta;
         const x = Math.cos(a) * r + offset.x;
         const y = Math.sin(a) * r + offset.y;
         drawPoint("#eb8334", x, y);
