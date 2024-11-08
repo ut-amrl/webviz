@@ -105,6 +105,7 @@
     var mouseDown = false;
     var setLocation = false;
     var setGPSLocation = false;
+    var gpsMarkersDict = {};
     var setNavGoal = false;
     var setWaypoints = false;
     var resetNavGoals = false;
@@ -132,6 +133,7 @@
       if (setGPSLocation && robot_interface) {
         console.log("Clicked GPS location:", lat, lng);
         robot_interface.setGPSGoal(lat, lng);
+        updateGPS({ lat, lng, heading: 0}, 'goal', 'red', 'x');
         setGPSLocation = false;
         document.getElementById("setGPSGoal").style = ""; // Reset the button style
       }
@@ -908,42 +910,62 @@
       drawLine(kPoseColor, p3.x, p3.y, p1.x, p1.y);
     }
 
-    // Function to add a new GPS point to the map with orientation
-    const gpsMarkers = [];
-    function drawGPS(gps_pose) {
-      // Destructure gps_pose dictionary
-      const { lat, lng, heading } = gps_pose;
-
-      // Create an icon based on the heading
-      const icon = createArrowIcon(heading);
-
-      // If there are already 10 markers, remove the oldest one
-      if (gpsMarkers.length >= 10) {
-          const oldestMarker = gpsMarkers.shift();
-          osm_map.removeLayer(oldestMarker);
+    // Function to add a new GPS point to the map with orientation and color gradient
+    function updateGPS(gps_dict, key, color, icon_shape='arrow') {
+      const { lat, lng, heading } = gps_dict;
+      
+      // Initialize the key in the dictionary if not present
+      if (!gpsMarkersDict[key]) {
+        gpsMarkersDict[key] = [];
+      }
+      
+      // Remove the oldest marker if we already have 10 markers
+      if (gpsMarkersDict[key].length >= 10) {
+        const oldestMarker = gpsMarkersDict[key].shift();
+        osm_map.removeLayer(oldestMarker);
       }
 
-      // Add a new marker for the current GPS point
-      const newMarker = L.marker([lat, lng], { icon }).addTo(osm_map);
+      // Calculate the opacity for each marker based on its position in the history
+      gpsMarkersDict[key].forEach((marker, index) => {
+        const opacity = (index + 1) / 10; // Scale opacity from 0.1 to 1 for 10 markers)
+        const oldIcon = createIcon(marker.options.icon.options.heading, icon_shape, color, opacity);
+        marker.setIcon(oldIcon);
+      });
 
-      // Store the new marker in the array
-      gpsMarkers.push(newMarker);
+      // Add the new marker with full opacity
+      const newIcon = createIcon(heading, icon_shape, color, 1.0); // Full opacity for the newest marker
+      const newMarker = L.marker([lat, lng], { icon: newIcon }).addTo(osm_map);
+      newMarker.options.icon.options.heading = heading; // Store heading for future updates
+
+      // Add the new marker to the dictionary
+      gpsMarkersDict[key].push(newMarker);
 
       // Pan the map to the latest GPS point
       osm_map.panTo([lat, lng]);
     }
 
     // Function to create an arrow icon with the given heading
-    function createArrowIcon(heading) {
-      // Adjust heading by -90 degrees to align 0 degrees to north
-      // const rotation = (heading) * (180.0 / Math.PI); // Convert radians to degrees
+    function createIcon(heading, shape='arrow', color='blue', opacity=1) {
       const rotation = heading; // Already in degrees
 
-      const svgIcon = `
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-          <polygon points="50,0 90,100 50,75 10,100" style="fill:blue;" />
-        </svg>
-      `;
+      let svgIcon = undefined;
+      if (shape == 'arrow') {
+        svgIcon = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <polygon points="50,0 90,100 50,75 10,100" style="fill:${color};opacity:${opacity};" />
+          </svg>
+        `;
+      } else if (shape == 'x') {
+        svgIcon = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <line x1="10" y1="10" x2="90" y2="90" stroke="${color}" stroke-width="15" stroke-opacity="${opacity}" />
+            <line x1="90" y1="10" x2="10" y2="90" stroke="${color}" stroke-width="15" stroke-opacity="${opacity}" />
+          </svg>
+        `
+      } else {
+        console.error('Invalid shape for icon:', shape);
+        return createArrowIcon(color, opacity, rotation);
+      }
 
       return L.divIcon({
         className: 'arrow-marker',
@@ -981,7 +1003,7 @@
         drawLine("#000000", p0.x, p0.y, p1.x, p1.y);
       }
       if (visMsg) drawPose(visMsg.header.robot_pose, 'rgb(0, 150, 0)');
-      if (visMsg) drawGPS(visMsg.header.robot_gps);
+      if (visMsg) updateGPS(visMsg.header.robot_gps, 'robot', 'blue');
     }
 
     function setColor(c) {
