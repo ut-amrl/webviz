@@ -4,6 +4,9 @@
 <head>
   <meta charset="utf-8" />
 
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
   <style>
     body {
       margin: 0;
@@ -23,6 +26,12 @@
       /* mobile webkit */
     }
 
+    #mapPanel {
+      width: 100%;
+      height: 400px;
+      margin-top: 20px;
+    }
+
     input[type=button] {
       user-select: none;
       -webkit-user-select: none;
@@ -33,6 +42,12 @@
       outline: none;
       -webkit-tap-highlight-color: rgba(255, 255, 255, 0);
       /* mobile webkit */
+    }
+
+    .arrow-marker {
+      width: 20px;
+      height: 20px;
+      transform-origin: 50% 50%;
     }
   </style>
 
@@ -68,6 +83,7 @@
     <option value="EmptyMap">EmptyMap</option>
   </select>
   <br>
+  <div id="mapPanel"></div>
   <canvas id="canvas" width="800" height="600" tabindex="0"> </canvas>
   <br>
   <label id="coords">0,0</label>
@@ -92,11 +108,20 @@
     var coords = document.getElementById("coords");
     var mapList = document.getElementById("map");
     var robotPose = undefined;
+    var robotGPS = undefined;
     var tLastDraw = 0;
     var map = [];
     var lastLaserScan = undefined;
     var robot_interface = undefined;
     var currentMapName = '';
+
+    // Leaflet Map Initialization for OpenStreetMap
+    var robotGPSPose = { lat: 30.285949, lng: -97.737157 }; // Example coordinates for initialization
+    var osm_map = L.map('mapPanel').setView([robotGPSPose.lat, robotGPSPose.lng], 18);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 20,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(osm_map);
 
     try {
       if (window.localStorage.getItem('ipaddr')) {
@@ -131,9 +156,9 @@
           laser_min_angle: 0,
           laser_max_angle: 0,
           robot_pose: { x: NaN, y: NaN, theta: NaN },
+          robot_gps: { lat: NaN, lng: NaN, heading: NaN },
           map: ''
         };
-
         this.length = arrayBuffer.byteLength;
         this.remainingBytes = this.length;
         this.dataView = new DataView(arrayBuffer, 0);
@@ -176,6 +201,13 @@
         return x;
       }
 
+      readFloat64() {
+        let x = this.dataView.getFloat64(this.offset, this.littleEndian);
+        this.offset += 8;
+        this.remainingBytes -= 8;
+        return x;
+      }
+
       readString() {
         let s = '';
         let end_of_str = false;
@@ -203,8 +235,21 @@
         this.header.laser_min_angle = this.readFloat32();
         this.header.laser_max_angle = this.readFloat32();
         this.header.robot_pose = this.readPose();
+        this.header.robot_gps = this.readGPS();
         this.header.map = this.readString();
         return this.header;
+      }
+
+      readGPS() {
+        let gps = {
+          lat: 0,
+          lng: 0,
+          heading: 0
+        };
+        gps.lat = this.readFloat64();
+        gps.lng = this.readFloat64();
+        gps.heading = this.readFloat64();
+        return gps;
       }
 
       readPose() {
@@ -302,9 +347,11 @@
           lines: this.readMultiple(this.header.num_lines, () => this.readLine()),
           arcs: this.readMultiple(this.header.num_arcs, () => this.readArc()),
           textAnnotations: this.readMultiple(this.header.num_text_annotations, () => this.readTextMessage()),
-          robotPose: undefined
+          robotPose: undefined,
+          robotGPS: undefined
         }
         message.robotPose = message.header.robot_pose;
+        message.robotGPS = message.header.robot_gps;
         return message;
       }
     };
@@ -398,6 +445,19 @@
           x: x,
           y: y,
           theta: theta,
+          map: currentMapName
+        }));
+      }
+
+      setGPSGoal(lat, lon) {
+        if (!this.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        this.socket.send(JSON.stringify({
+          type: "set_gps_goal",
+          lat: lat,
+          lon: lon,
           map: currentMapName
         }));
       }
@@ -724,6 +784,7 @@
       visMsg = d;
       lastLaserScan = d.laser;
       robotPose = d.robotPose;
+      robotGPS = d.robotGPS;
     }
 
     function processJsonData(json) {
@@ -824,6 +885,41 @@
       drawLine(kPoseColor, p3.x, p3.y, p1.x, p1.y);
     }
 
+    // Simulate receiving data periodically (replace with actual data updates)
+    // setInterval(() => {
+    //   const simulatedData = { robot_gps: { lat: 30.285949 + Math.random() * 0.0001, lng: -97.737157 + Math.random() * 0.0001, heading: 0 } };
+    //   addGPSPoint(simulatedData.robot_gps);
+    // }, 2000);
+
+    // Function to add a new GPS point to the map with orientation
+    function addGPSPoint(gps_pose) {
+      const { lat, lng, heading } = gps_pose;
+      const icon = createArrowIcon(heading); // Create an icon based on the heading
+
+      // Add a new marker for each GPS point with orientation
+      L.marker([lat, lng], { icon }).addTo(osm_map);
+      osm_map.panTo([lat, lng]);
+    }
+
+    // Function to create an arrow icon with the given heading
+    function createArrowIcon(heading) {
+      // Adjust heading by -90 degrees to align 0 degrees to north
+      const rotation = (heading + Math.PI / 2) * (180 / Math.PI); // Convert radians to degrees
+
+      const svgIcon = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+          <polygon points="50,0 90,100 50,75 10,100" style="fill:blue;" />
+        </svg>
+      `;
+
+      return L.divIcon({
+        className: 'arrow-marker',
+        iconSize: [12, 12],
+        iconAnchor: [6, 6],
+        html: `<div style="transform: rotate(${rotation}deg);">${svgIcon}</div>`,
+      });
+    }
+
     function draw() {
       const kDrawInterval = 0.03;
       const tNow = window.performance.now();
@@ -850,6 +946,7 @@
         drawLine("#000000", p0.x, p0.y, p1.x, p1.y);
       }
       if (visMsg) drawPose(visMsg.header.robot_pose, 'rgb(0, 150, 0)');
+      if (visMsg) drawGPSPoint(visMsg.header.robot_gps);
     }
 
     function setColor(c) {

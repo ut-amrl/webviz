@@ -22,24 +22,25 @@
 #include <algorithm>
 #include <vector>
 
+#include "amrl_msgs/Localization2DMsg.h"
+#include "amrl_msgs/VisualizationMsg.h"
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseWithCovarianceStamped.h"
-#include "std_msgs/Empty.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "math/math_util.h"
 #include "ros/ros.h"
 #include "sensor_msgs/LaserScan.h"
-
-#include "amrl_msgs/VisualizationMsg.h"
-#include "amrl_msgs/Localization2DMsg.h"
-#include "math/math_util.h"
+#include "std_msgs/Empty.h"
+#include "std_msgs/Float64MultiArray.h"
 #include "util/timer.h"
 #include "websocket.h"
 
-using amrl_msgs::VisualizationMsg;
 using amrl_msgs::Localization2DMsg;
+using amrl_msgs::VisualizationMsg;
 using sensor_msgs::LaserScan;
 using std::vector;
+using std_msgs::Float64MultiArray;
 
 DEFINE_double(fps, 10.0, "Max visualization frames rate.");
 DEFINE_double(max_age, 2.0, "Maximum age of a message before it gets dropped.");
@@ -53,6 +54,7 @@ geometry_msgs::PoseStamped nav_goal_msg_;
 amrl_msgs::Localization2DMsg amrl_initial_pose_msg_;
 amrl_msgs::Localization2DMsg amrl_nav_goal_msg_;
 std_msgs::Empty reset_nav_goals_msg_;
+Float64MultiArray gps_pose_msg_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
 ros::Publisher init_loc_pub_;
@@ -64,19 +66,23 @@ bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
 }  // namespace
 
-void LocalizationCallback(const Localization2DMsg& msg) {
+void LocalizationCallback(const Localization2DMsg &msg) {
   localization_msg_ = msg;
 }
 
-void LaserCallback(const LaserScan& msg) {
+void LaserCallback(const LaserScan &msg) {
   laser_scan_ = msg;
   updates_pending_ = true;
 }
 
-void VisualizationCallback(const VisualizationMsg& msg) {
+void GPSPoseCallback(const Float64MultiArray &msg) {
+  gps_pose_msg_ = msg;
+  updates_pending_ = true;
+}
+
+void VisualizationCallback(const VisualizationMsg &msg) {
   static bool warning_showed_ = false;
-  if (msg.header.frame_id != "base_link" &&
-      msg.header.frame_id != "map") {
+  if (msg.header.frame_id != "base_link" && msg.header.frame_id != "map") {
     if (!warning_showed_) {
       fprintf(stderr,
               "WARNING: Ignoring visualization for unknown frame '%s'."
@@ -86,12 +92,9 @@ void VisualizationCallback(const VisualizationMsg& msg) {
     }
     return;
   }
-  auto prev_msg =
-      std::find_if(vis_msgs_.begin(),
-                   vis_msgs_.end(),
-                   [&msg](const VisualizationMsg &m) {
-                     return m.ns == msg.ns;
-                   });
+  auto prev_msg = std::find_if(
+      vis_msgs_.begin(), vis_msgs_.end(),
+      [&msg](const VisualizationMsg &m) { return m.ns == msg.ns; });
   if (prev_msg == vis_msgs_.end()) {
     vis_msgs_.push_back(msg);
   } else {
@@ -106,8 +109,7 @@ void MergeVector(const std::vector<T> &v1, std::vector<T> *v2) {
 }
 
 // Merge message m1 into m2.
-void MergeMessage(const VisualizationMsg &m1,
-                  VisualizationMsg *m2_ptr) {
+void MergeMessage(const VisualizationMsg &m1, VisualizationMsg *m2_ptr) {
   VisualizationMsg &m2 = *m2_ptr;
   MergeVector(m1.points, &m2.points);
   MergeVector(m1.lines, &m2.lines);
@@ -120,12 +122,10 @@ void DropOldMessages() {
   if ((now - laser_scan_.header.stamp).toSec() > FLAGS_max_age) {
     laser_scan_.header.stamp = ros::Time(0);
   }
-  std::remove_if(
-      vis_msgs_.begin(),
-      vis_msgs_.end(),
-      [&now](const VisualizationMsg &m) {
-        return ((now - m.header.stamp).toSec() > FLAGS_max_age);
-      });
+  std::remove_if(vis_msgs_.begin(), vis_msgs_.end(),
+                 [&now](const VisualizationMsg &m) {
+                   return ((now - m.header.stamp).toSec() > FLAGS_max_age);
+                 });
 }
 
 void SendUpdate() {
@@ -147,16 +147,14 @@ void SendUpdate() {
       MergeMessage(m, &local_msgs);
     }
   }
-  server_->Send(local_msgs,
-                global_msgs,
-                laser_scan_,
-                localization_msg_);
+  server_->Send(local_msgs, global_msgs, laser_scan_, localization_msg_,
+                gps_pose_msg_);
 }
 
 void SetInitialPose(float x, float y, float theta, QString map) {
   if (FLAGS_v > 0) {
-    printf("Set initial pose: %s %f,%f, %f\n",
-        map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
+    printf("Set initial pose: %s %f,%f, %f\n", map.toStdString().c_str(), x, y,
+           math_util::RadToDeg(theta));
   }
   initial_pose_msg_.header.stamp = ros::Time::now();
   initial_pose_msg_.pose.pose.position.x = x;
@@ -181,8 +179,8 @@ void ResetNavGoals() {
 
 void SetNavGoal(float x, float y, float theta, QString map) {
   if (FLAGS_v > 0) {
-    printf("Set nav goal: %s %f,%f, %f\n",
-        map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
+    printf("Set nav goal: %s %f,%f, %f\n", map.toStdString().c_str(), x, y,
+           math_util::RadToDeg(theta));
   }
   nav_goal_msg_.header.stamp = ros::Time::now();
   nav_goal_msg_.pose.position.x = x;
@@ -201,20 +199,19 @@ void SetNavGoal(float x, float y, float theta, QString map) {
 void *RosThread(void *arg) {
   pthread_detach(pthread_self());
   CHECK_NOTNULL(server_);
-  QObject::connect(
-      server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
-  QObject::connect(
-      server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
-  QObject::connect(
-      server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
+  QObject::connect(server_, &RobotWebSocket::SetInitialPoseSignal,
+                   &SetInitialPose);
+  QObject::connect(server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
+  QObject::connect(server_, &RobotWebSocket::ResetNavGoalsSignal,
+                   &ResetNavGoals);
 
   ros::NodeHandle n;
-  ros::Subscriber laser_sub =
-      n.subscribe("/scan", 5, &LaserCallback);
+  ros::Subscriber laser_sub = n.subscribe("/scan", 5, &LaserCallback);
   ros::Subscriber vis_sub =
       n.subscribe("/visualization", 10, &VisualizationCallback);
   ros::Subscriber localization_sub =
       n.subscribe("/localization", 10, &LocalizationCallback);
+  ros::Subscriber gps_pose_sub = n.subscribe("/gps_pose", 10, &GPSPoseCallback);
   init_loc_pub_ =
       n.advertise<geometry_msgs::PoseWithCovarianceStamped>("/initialpose", 10);
   nav_goal_pub_ =
@@ -223,8 +220,7 @@ void *RosThread(void *arg) {
       n.advertise<amrl_msgs::Localization2DMsg>("/set_pose", 10);
   amrl_nav_goal_pub_ =
       n.advertise<amrl_msgs::Localization2DMsg>("/set_nav_target", 10);
-  reset_nav_goals_pub_ =
-      n.advertise<std_msgs::Empty>("/reset_nav_goals", 10);
+  reset_nav_goals_pub_ = n.advertise<std_msgs::Empty>("/reset_nav_goals", 10);
 
   RateLoop loop(FLAGS_fps);
   while (ros::ok() && run_) {
@@ -255,12 +251,9 @@ void InitMessage() {
   initial_pose_msg_.header.frame_id = "map";
   // Copy RViz's covariance.
   initial_pose_msg_.pose.covariance = {
-      0.25, 0, 0, 0, 0, 0,
-      0, 0.25, 0, 0, 0, 0,
-      0, 0, 0.25, 0, 0, 0,
-      0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, math_util::DegToRad(4.0)};
+      0.25, 0, 0,    0, 0, 0, 0, 0.25, 0, 0, 0, 0,
+      0,    0, 0.25, 0, 0, 0, 0, 0,    0, 0, 0, 0,
+      0,    0, 0,    0, 0, 0, 0, 0,    0, 0, 0, math_util::DegToRad(4.0)};
   initial_pose_msg_.pose.pose.position.x = 0;
   initial_pose_msg_.pose.pose.position.y = 0;
   initial_pose_msg_.pose.pose.position.z = 0;
@@ -268,6 +261,7 @@ void InitMessage() {
   initial_pose_msg_.pose.pose.orientation.x = 0;
   initial_pose_msg_.pose.pose.orientation.y = 0;
   initial_pose_msg_.pose.pose.orientation.z = 0;
+  gps_pose_msg_.data = {0, 0, 0};
   nav_goal_msg_.header = initial_pose_msg_.header;
 }
 
@@ -276,8 +270,8 @@ int main(int argc, char *argv[]) {
   google::ParseCommandLineFlags(&argc, &argv, false);
   QCoreApplication a(argc, argv);
   server_ = new RobotWebSocket(10272);
-  QObject::connect(
-      server_, &RobotWebSocket::closed, &a, &QCoreApplication::quit);
+  QObject::connect(server_, &RobotWebSocket::closed, &a,
+                   &QCoreApplication::quit);
 
   pthread_t ros_thread_id = 0;
   pthread_create(&ros_thread_id, NULL, &RosThread, NULL);
