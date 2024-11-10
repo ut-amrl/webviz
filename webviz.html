@@ -113,6 +113,7 @@
     var mapList = document.getElementById("map");
     var robotPose = undefined;
     var robotGPS = undefined;
+    var gpsGoals = [];
     var tLastDraw = 0;
     var map = [];
     var lastLaserScan = undefined;
@@ -129,11 +130,13 @@
 
     // Listen for clicks on the Leaflet map to get GPS coordinates
     osm_map.on('click', function(e) {
-      const { lat, lng } = e.latlng; // Get the latitude and longitude of the click
+      const { lat: start_lat, lng: start_lon } = robotGPS; // Use `lat` and `lng` from `robotGPS`
+      const { lat: end_lat, lng: end_lon } = e.latlng; // Get the latitude and longitude of the click
       if (setGPSLocation && robot_interface) {
-        console.log("Clicked GPS location:", lat, lng);
-        robot_interface.setGPSGoal(lat, lng);
-        updateGPS({ lat, lng, heading: 0}, 'goal', 'red', 'x');
+        console.log("Clicked GPS location:", end_lat, end_lon);
+        robot_interface.setGPSGoal(start_lat, start_lon, end_lat, end_lon);
+        console.log("Updating gps goal on map ", end_lat, end_lon);
+        updateGPS({ "lat": end_lat, "lng": end_lon, heading: 0}, 'goal', 'red', 'x');
         setGPSLocation = false;
         document.getElementById("setGPSGoal").style = ""; // Reset the button style
       }
@@ -252,8 +255,18 @@
         this.header.laser_max_angle = this.readFloat32();
         this.header.robot_pose = this.readPose();
         this.header.robot_gps = this.readGPS();
+        this.header.gps_goals = this.readGPSGoals();
         this.header.map = this.readString();
         return this.header;
+      }
+
+      readGPSGoals() {
+        let gps_goals = []
+        gps_goals.push(this.readFloat32()); // num_goals
+        for (let i = 0; i < 30; ++i) { // Figure out a better way to synchronize this with websocket.h
+          gps_goals.push(this.readGPS());
+        }
+        return gps_goals;
       }
 
       readGPS() {
@@ -364,10 +377,12 @@
           arcs: this.readMultiple(this.header.num_arcs, () => this.readArc()),
           textAnnotations: this.readMultiple(this.header.num_text_annotations, () => this.readTextMessage()),
           robotPose: undefined,
-          robotGPS: undefined
+          robotGPS: undefined,
+          gpsGoals: undefined
         }
         message.robotPose = message.header.robot_pose;
         message.robotGPS = message.header.robot_gps;
+        message.gpsGoals = message.header.gps_goals;
         return message;
       }
     };
@@ -465,15 +480,25 @@
         }));
       }
 
-      setGPSGoal(lat, lon) {
+      setGPSGoal(start_lat, start_lon, end_lat, end_lon) {
         if (!this.socket) {
           console.error('Error: not connected');
           return;
         }
+        let payload = {
+          type: "set_gps_goal",
+          start_lat: start_lat,
+          start_lon: start_lon,
+          end_lat: end_lat,
+          end_lon: end_lon
+        };
+        console.log("JSON Payload: ", JSON.stringify(payload));
         this.socket.send(JSON.stringify({
           type: "set_gps_goal",
-          lat: lat,
-          lon: lon
+          start_lat: start_lat,
+          start_lon: start_lon,
+          end_lat: end_lat,
+          end_lon: end_lon
         }));
       }
 
@@ -582,6 +607,19 @@
       };
       xhr.open('GET', url, true);
       xhr.send();
+    }
+
+    function compareGPS(gps1, gps2) {
+      const { lat: lat1, lng: lon1, heading: heading1 } = gps1;
+      const { lat: lat2, lng: lon2, heading: heading2 } = gps2;
+      const latThreshold = 0.0001;
+      const lonThreshold = 0.0001;
+      const headingThreshold = 0.1;
+      lat_ = Math.abs(lat1 - lat2);
+      lon_ = Math.abs(lon1 - lon2);
+      heading_ = Math.abs(heading1 - heading2);
+      // console.log(`%clat_: ${lat_}, lon_: ${lon_}, heading_: ${heading_}`, 'color: gray;');
+      return (lat_ < latThreshold && lon_ < lonThreshold && heading_ < headingThreshold);
     }
 
     function comparePoses(pose1, pose2) {
@@ -910,6 +948,61 @@
       drawLine(kPoseColor, p3.x, p3.y, p1.x, p1.y);
     }
 
+    function updateGPSGoals(gps_goals, key, color) {
+      // Use a static variable to store the previous goals
+      updateGPSGoals.previousGoals = updateGPSGoals.previousGoals || [];
+
+      // Check if the last goal has changed approximately
+      const lastGoal = updateGPSGoals.previousGoals[updateGPSGoals.previousGoals.length - 1];
+      const newGoal = gps_goals[gps_goals.length - 1];
+      if (lastGoal != undefined && compareGPS(lastGoal, newGoal)) {
+        return;
+      }
+      
+      gpsGoalMarkers = gpsMarkersDict[key] || [];
+      // Update the static variable to the new goals
+      updateGPSGoals.previousGoals = gps_goals;
+
+      // Clear previous GPS goal markers from the map
+      gpsGoalMarkers.forEach(marker => {
+        osm_map.removeLayer(marker);
+      });
+      gpsGoalMarkers = []; // Reset the marker array
+
+      // Replot the GPS markers based on the updated gps_goals
+      console.log("GPS Goals updated:", gps_goals);
+      const numGoals = gps_goals.shift();
+      if (numGoals > 0) {
+        gps_goals.forEach((goal, index) => {
+          if (index >= numGoals) {
+            return;
+          }
+          // Customize marker color and opacity based on position in the path
+          const color = 'blue';
+          // const opacity = (index + 1) / gps_goals.length;
+          const opacity = 0.5;
+
+          // Create an icon for each GPS goal
+          const icon = L.divIcon({
+            className: 'gps-goal-marker',
+            html: `<div style="background-color: ${color}; opacity: ${opacity}; width: 10px; height: 10px; border-radius: 50%;"></div>`,
+            iconSize: [10, 10],
+          });
+          console.log("goal:", goal);
+          // Create a marker and add it to the map
+          const marker = L.marker([goal.lat, goal.lng], { icon }).addTo(osm_map);
+          gpsGoalMarkers.push(marker); // Add marker to the global array
+        });
+
+        // Optionally pan to the last goal or center of all goals
+        const lastGoal = gps_goals[gps_goals.length - 1];
+        // osm_map.panTo([lastGoal.lat, lastGoal.lng]);
+
+        // Update the dictionary with the new markers
+        gpsMarkersDict[key] = gpsGoalMarkers;
+      }
+    }
+
     // Function to add a new GPS point to the map with orientation and color gradient
     function updateGPS(gps_dict, key, color, icon_shape='arrow') {
       const { lat, lng, heading } = gps_dict;
@@ -1004,6 +1097,7 @@
       }
       if (visMsg) drawPose(visMsg.header.robot_pose, 'rgb(0, 150, 0)');
       if (visMsg) updateGPS(visMsg.header.robot_gps, 'robot', 'blue');
+      if (visMsg) updateGPSGoals(visMsg.header.gps_goals, 'gps_plan', 'green');
     }
 
     function setColor(c) {

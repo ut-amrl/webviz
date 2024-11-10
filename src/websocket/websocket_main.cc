@@ -26,6 +26,7 @@
 #include "amrl_msgs/VisualizationMsg.h"
 #include "amrl_msgs/GPSArrayMsg.h"
 #include "amrl_msgs/GPSMsg.h"
+#include "amrl_msgs/graphNavGPSSrv.h"
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseWithCovarianceStamped.h"
 #include "gflags/gflags.h"
@@ -44,6 +45,7 @@ using sensor_msgs::LaserScan;
 using std::vector;
 using amrl_msgs::GPSArrayMsg;
 using amrl_msgs::GPSMsg;
+using amrl_msgs::graphNavGPSSrv;
 using std_msgs::Float64MultiArray;
 
 DEFINE_double(fps, 10.0, "Max visualization frames rate.");
@@ -55,7 +57,10 @@ bool run_ = true;
 vector<VisualizationMsg> vis_msgs_;
 geometry_msgs::PoseWithCovarianceStamped initial_pose_msg_;
 geometry_msgs::PoseStamped nav_goal_msg_;
-amrl_msgs::GPSArrayMsg gps_goal_msg_;
+amrl_msgs::GPSMsg robot_gps_msg_;
+amrl_msgs::GPSArrayMsg gps_goals_msg_;
+ros::ServiceClient client;
+amrl_msgs::graphNavGPSSrv srv;
 amrl_msgs::Localization2DMsg amrl_initial_pose_msg_;
 amrl_msgs::Localization2DMsg amrl_nav_goal_msg_;
 std_msgs::Empty reset_nav_goals_msg_;
@@ -161,7 +166,7 @@ void SendUpdate() {
   }
 
   server_->Send(local_msgs, global_msgs, laser_scan_, laser_lowbeam_scan_, 
-    localization_msg_, gps_pose_msg_);
+    localization_msg_, gps_goals_msg_, gps_pose_msg_);
 }
 
 void SetInitialPose(float x, float y, float theta, QString map) {
@@ -187,6 +192,7 @@ void ResetNavGoals() {
   if (FLAGS_v > 0) {
     printf("Reset nav goals.\n");
   }
+  gps_goals_msg_.data.clear();
   reset_nav_goals_pub_.publish(reset_nav_goals_msg_);
 }
 
@@ -209,22 +215,45 @@ void SetNavGoal(float x, float y, float theta, QString map) {
   amrl_nav_goal_pub_.publish(amrl_nav_goal_msg_);
 }
 
-void SetGPSGoal(float lat, float lon) {
+void SetGPSGoal(float start_lat, float start_lon, float end_lat, float end_lon) {
   if (FLAGS_v > 0) {
-    printf("Set gps goal: %f, %f\n", lat, lon);
+    printf("Set gps goal: %f, %f\n", end_lat, end_lon);
   }
-  GPSMsg msg;
-  msg.header.stamp = ros::Time::now();
-  msg.latitude = lat;
-  msg.longitude = lon;
-  gps_goal_msg_.header.stamp = msg.header.stamp;
-  gps_goal_msg_.data = { msg };
-  amrl_gps_goal_pub_.publish(gps_goal_msg_);
+  srv.request.start.header.stamp = ros::Time::now();
+  srv.request.start.latitude = start_lat;
+  srv.request.start.longitude = start_lon;
+
+  gps_goals_msg_.header.stamp = ros::Time::now();
+  gps_goals_msg_.data.clear();
+  GPSMsg goal_msg;
+  goal_msg.header.stamp = ros::Time::now();
+  goal_msg.latitude = end_lat;
+  goal_msg.longitude = end_lon;
+  gps_goals_msg_.data = { goal_msg };
+
+  srv.request.goals = gps_goals_msg_;
+  if (client.call(srv)) {
+    ROS_INFO("Service call successful");
+    // Save the response path to the class variable
+    gps_goals_msg_ = srv.response.plan;
+
+    if (FLAGS_v > 0) {
+      for (const auto& gps_goal : gps_goals_msg_.data) {
+        ROS_INFO("Path point: %f, %f", gps_goal.latitude, gps_goal.longitude);
+      }
+    }
+  } else {
+    ROS_ERROR("Service call failed");
+  }
 }
 
 void *RosThread(void *arg) {
   pthread_detach(pthread_self());
   CHECK_NOTNULL(server_);
+
+  ros::NodeHandle n;
+  client = n.serviceClient<amrl_msgs::graphNavGPSSrv>("graphNavGPSSrv");
+
   QObject::connect(server_, &RobotWebSocket::SetInitialPoseSignal,
                    &SetInitialPose);
   QObject::connect(server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
@@ -232,7 +261,6 @@ void *RosThread(void *arg) {
                    &ResetNavGoals);
   QObject::connect(server_, &RobotWebSocket::SetGPSGoalSignal, &SetGPSGoal);
 
-  ros::NodeHandle n;
   ros::Subscriber laser_sub = n.subscribe("/velodyne_2dscan_high_beams", 5, &LaserCallback);
   ros::Subscriber laser_lowbeam_sub =
       n.subscribe("/velodyne_2dscan_lowbeam", 5, &LaserLowBeamCallback);
@@ -249,8 +277,8 @@ void *RosThread(void *arg) {
       n.advertise<amrl_msgs::Localization2DMsg>("/set_pose", 10);
   amrl_gps_goal_pub_ =
       n.advertise<amrl_msgs::GPSArrayMsg>("/set_gps_goal", 10);
-  amrl_nav_goal_pub_ =
-      n.advertise<amrl_msgs::Localization2DMsg>("/set_nav_target", 10);
+  // amrl_nav_goal_pub_ =
+  //     n.advertise<amrl_msgs::Localization2DMsg>("/set_nav_target", 10);
   reset_nav_goals_pub_ = n.advertise<std_msgs::Empty>("/reset_nav_goals", 10);
 
   RateLoop loop(FLAGS_fps);
@@ -292,6 +320,8 @@ void InitMessage() {
   initial_pose_msg_.pose.pose.orientation.x = 0;
   initial_pose_msg_.pose.pose.orientation.y = 0;
   initial_pose_msg_.pose.pose.orientation.z = 0;
+  gps_goals_msg_.header.stamp = ros::Time(0);
+  gps_goals_msg_.data.clear();
   gps_pose_msg_.data = {0, 0, 0, 0, 0};
   nav_goal_msg_.header = initial_pose_msg_.header;
 }

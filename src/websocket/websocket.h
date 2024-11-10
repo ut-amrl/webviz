@@ -37,11 +37,17 @@
 #include "amrl_msgs/Localization2DMsg.h"
 #include "amrl_msgs/Point2D.h"
 #include "amrl_msgs/VisualizationMsg.h"
+#include "amrl_msgs/GPSArrayMsg.h"
 #include "sensor_msgs/LaserScan.h"
 #include "std_msgs/Float64MultiArray.h"
 
 class QWebSocketServer;
 class QWebSocket;
+
+#define ROUTE_HEADER_SIZE (size_t) 1
+#define MAX_ROUTE_NODES (size_t) 30
+#define NODE_SIZE (size_t) 3
+#define MAX_ROUTE_SIZE (ROUTE_HEADER_SIZE+MAX_ROUTE_NODES*NODE_SIZE)
 
 struct MessageHeader {
   MessageHeader() : nonce(42) {}
@@ -60,13 +66,14 @@ struct MessageHeader {
   float loc_x;                          // 13
   float loc_y;                          // 14
   float loc_r;                          // 15       
-  float lat;                           // 16
-  float lng;                           // 17
-  float heading;                       // 18
+  float lat;                            // 16
+  float lng;                            // 17
+  float heading;                        // 18
+  float route[MAX_ROUTE_SIZE];          // 19:19+MAX_ROUTE_SIZE
   char map[32];                         //
   size_t GetByteLength() const {
     const size_t len =
-        18 * 4 + 32 +  // header fields + map data
+        18 * 4 + MAX_ROUTE_SIZE*4 + 32 +  // header fields + map data
         num_laser_rays * 4 +   // each ray is uint32_t
         num_points * 3 * 4 +   // x, y, color
         num_lines * 5 * 4 +    // x1, y1, x2, y2, color
@@ -97,6 +104,7 @@ struct DataMessage {
       const amrl_msgs::VisualizationMsg& local_msg,
       const amrl_msgs::VisualizationMsg& global_msg,
       const amrl_msgs::Localization2DMsg& localization_msg,
+      const amrl_msgs::GPSArrayMsg& gps_route_msg,
       const std_msgs::Float64MultiArray& gps_pose_msg);
 };
 
@@ -110,6 +118,7 @@ class RobotWebSocket : public QObject {
             const sensor_msgs::LaserScan& laser_scan,
             const sensor_msgs::LaserScan& laser_lowbeam_scan,
             const amrl_msgs::Localization2DMsg& localization,
+            const amrl_msgs::GPSArrayMsg& gps_goals_msg,
             const std_msgs::Float64MultiArray& gps_pose);
 
  Q_SIGNALS:
@@ -117,7 +126,7 @@ class RobotWebSocket : public QObject {
   void SendDataSignal();
   void SetInitialPoseSignal(float x, float y, float theta, QString map);
   void SetNavGoalSignal(float x, float y, float theta, QString map);
-  void SetGPSGoalSignal(float lat, float lon);
+  void SetGPSGoalSignal(float start_lat, float start_lon, float end_lat, float end_lon);
   void ResetNavGoalsSignal();
 
  private Q_SLOTS:
@@ -141,6 +150,7 @@ class RobotWebSocket : public QObject {
   sensor_msgs::LaserScan laser_scan_;
   sensor_msgs::LaserScan laser_lowbeam_scan_;
   amrl_msgs::Localization2DMsg localization_;
+  amrl_msgs::GPSArrayMsg gps_goals_msg_;
   std_msgs::Float64MultiArray gps_pose_;
 };
 

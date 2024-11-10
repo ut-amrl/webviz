@@ -51,6 +51,7 @@ using amrl_msgs::ColoredText;
 using amrl_msgs::Localization2DMsg;
 using amrl_msgs::Point2D;
 using amrl_msgs::VisualizationMsg;
+using amrl_msgs::GPSArrayMsg;
 using sensor_msgs::LaserScan;
 using std::vector;
 using std_msgs::Float64MultiArray;
@@ -193,6 +194,7 @@ DataMessage DataMessage::FromRosMessages(
     const VisualizationMsg& local_msg,
     const VisualizationMsg& global_msg,
     const Localization2DMsg& localization_msg,
+    const GPSArrayMsg& gps_goals_msg,
     const Float64MultiArray& gps_msg) {
   static const bool kDebug = false;
   DataMessage msg;
@@ -205,6 +207,14 @@ DataMessage DataMessage::FromRosMessages(
   msg.header.lat = gps_msg.data[1];
   msg.header.lng = gps_msg.data[2];
   msg.header.heading = gps_msg.data[4];
+  // Copy over GPS route
+  msg.header.route[0] = gps_goals_msg.data.size();
+  for (size_t i = 0; i < gps_goals_msg.data.size(); i++) {
+    const auto& route_node = gps_goals_msg.data[i];
+    msg.header.route[ROUTE_HEADER_SIZE + i*NODE_SIZE] = route_node.latitude;
+    msg.header.route[ROUTE_HEADER_SIZE + i*NODE_SIZE + 1] = route_node.longitude;
+    msg.header.route[ROUTE_HEADER_SIZE + i*NODE_SIZE + 2] = route_node.heading;
+  }
   // printf("lat %lf lng %lf, heading %lf", msg.header.lat, msg.header.lng, msg.header.heading );
   strncpy(msg.header.map, localization_msg.map.data(),
           std::min(sizeof(msg.header.map) - 1, localization_msg.map.size()));
@@ -343,10 +353,11 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
                      json.value("theta").toDouble(),
                      json.value("map").toString());
   } else if (type == "set_gps_goal") {
-    if (!AllNumericalKeysPresent({"lat", "lon"}, json)) {
+    if (!AllNumericalKeysPresent({"start_lat", "start_lon", "end_lat", "end_lon"}, json)) {
       SendError("Invalid set_gps_goal parameters");
     }
-    SetGPSGoalSignal(json.value("lat").toDouble(), json.value("lon").toDouble());
+    SetGPSGoalSignal(json.value("start_lat").toDouble(), json.value("start_lon").toDouble(),
+      json.value("end_lat").toDouble(), json.value("end_lon").toDouble());
   } else if (type == "reset_nav_goals") {
     ResetNavGoalsSignal();
   } else {
@@ -402,7 +413,7 @@ void RobotWebSocket::SendDataSlot() {
   if (clients_.empty()) return;
   data_mutex_.lock();
   const auto data = DataMessage::FromRosMessages(
-      laser_scan_, laser_lowbeam_scan_, local_vis_, global_vis_, localization_, gps_pose_);
+      laser_scan_, laser_lowbeam_scan_, local_vis_, global_vis_, localization_, gps_goals_msg_, gps_pose_);
   const auto buffer = data.ToByteArray();
   CHECK_EQ(data.header.GetByteLength(), buffer.size());
   for (auto c : clients_) {
@@ -416,6 +427,7 @@ void RobotWebSocket::Send(const VisualizationMsg& local_vis,
                           const LaserScan& laser_scan,
                           const LaserScan& laser_lowbeam_scan,
                           const Localization2DMsg& localization,
+                          const GPSArrayMsg& gps_goals_msg,
                           const Float64MultiArray& gps_pose) {
   data_mutex_.lock();
   localization_ = localization;
@@ -423,6 +435,7 @@ void RobotWebSocket::Send(const VisualizationMsg& local_vis,
   global_vis_ = global_vis;
   laser_scan_ = laser_scan;
   laser_lowbeam_scan_ = laser_lowbeam_scan;
+  gps_goals_msg_ = gps_goals_msg;
   gps_pose_ = gps_pose;
   data_mutex_.unlock();
   SendDataSignal();
