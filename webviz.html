@@ -112,7 +112,7 @@
     var coords = document.getElementById("coords");
     var mapList = document.getElementById("map");
     var robotPose = undefined;
-    var robotGPS = undefined;
+    var robotGPS = { lat: 30.285949, lng: -97.737157 }; // Example coordinates for initialization
     var gpsGoals = [];
     var tLastDraw = 0;
     var map = [];
@@ -121,8 +121,7 @@
     var currentMapName = '';
 
     // Leaflet Map Initialization for OpenStreetMap
-    var robotGPSPose = { lat: 30.285949, lng: -97.737157 }; // Example coordinates for initialization
-    var osm_map = L.map('mapPanel').setView([robotGPSPose.lat, robotGPSPose.lng], 18);
+    var osm_map = L.map('mapPanel').setView([robotGPS.lat, robotGPS.lng], 18);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 20,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -988,7 +987,7 @@
             html: `<div style="background-color: ${color}; opacity: ${opacity}; width: 10px; height: 10px; border-radius: 50%;"></div>`,
             iconSize: [10, 10],
           });
-          console.log("goal:", goal);
+
           // Create a marker and add it to the map
           const marker = L.marker([goal.lat, goal.lng], { icon }).addTo(osm_map);
           gpsGoalMarkers.push(marker); // Add marker to the global array
