@@ -262,7 +262,7 @@
       readGPSGoals() {
         let gps_goals = []
         gps_goals.push(this.readFloat32()); // num_goals
-        for (let i = 0; i < 30; ++i) { // Figure out a better way to synchronize this with websocket.h
+        for (let i = 0; i < 120; ++i) { // Figure out a better way to synchronize this with websocket.h
           gps_goals.push(this.readGPS());
         }
         return gps_goals;
@@ -1012,7 +1012,7 @@
       }
       
       // Remove the oldest marker if we already have 10 markers
-      if (gpsMarkersDict[key].length >= 10) {
+      if (gpsMarkersDict[key].length >= 1) {
         const oldestMarker = gpsMarkersDict[key].shift();
         osm_map.removeLayer(oldestMarker);
       }

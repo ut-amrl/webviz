@@ -45,7 +45,7 @@ class QWebSocketServer;
 class QWebSocket;
 
 #define ROUTE_HEADER_SIZE (size_t) 1
-#define MAX_ROUTE_NODES (size_t) 30
+#define MAX_ROUTE_NODES (size_t) 120
 #define NODE_SIZE (size_t) 3
 #define MAX_ROUTE_SIZE (ROUTE_HEADER_SIZE+MAX_ROUTE_NODES*NODE_SIZE)
 
