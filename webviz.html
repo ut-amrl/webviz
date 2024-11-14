@@ -65,7 +65,7 @@
   <input type="button" id="setWaypoints" onclick="setWaypointsButton()" value="Set Waypoints">
   <input type="button" id="resetNav" onclick="resetNavButton()" value="Reset Nav" />
   Map:
-  <select id="map" value="GDC1" onchange="changeMap()">
+  <select id="map" value="UT_Campus" onchange="changeMap()">
     <option value="GDC1">GDC1</option>
     <option value="GDC2">GDC2</option>
     <option value="GDC3">GDC3</option>
@@ -93,7 +93,7 @@
   <script type="text/javascript" type="text/javascript">
     var canvas = document.getElementById("canvas");
     var visMsg = undefined;
-    var isDataUpdated = false; 
+    var isDataUpdated = false;
     var scale = 20;
     var origin = { x: 0.5 * canvas.width, y: 0.5 * canvas.height };
     var prev_origin = { x: 0, y: 0 };
@@ -128,14 +128,14 @@
     }).addTo(osm_map);
 
     // Listen for clicks on the Leaflet map to get GPS coordinates
-    osm_map.on('click', function(e) {
+    osm_map.on('click', function (e) {
       const { lat: start_lat, lng: start_lon } = robotGPS; // Use `lat` and `lng` from `robotGPS`
       const { lat: end_lat, lng: end_lon } = e.latlng; // Get the latitude and longitude of the click
       if (setGPSLocation && robot_interface) {
         console.log("Clicked GPS location:", end_lat, end_lon);
         robot_interface.setGPSGoal(start_lat, start_lon, end_lat, end_lon);
         console.log("Updating gps goal on map ", end_lat, end_lon);
-        updateGPS({ "lat": end_lat, "lng": end_lon, heading: 0}, 'goal', 'red', 'x');
+        updateGPS({ "lat": end_lat, "lng": end_lon, heading: 0 }, 'goal', 'red', 'x');
         setGPSLocation = false;
         document.getElementById("setGPSGoal").style = ""; // Reset the button style
       }
@@ -957,7 +957,7 @@
       if (lastGoal != undefined && compareGPS(lastGoal, newGoal)) {
         return;
       }
-      
+
       gpsGoalMarkers = gpsMarkersDict[key] || [];
       // Update the static variable to the new goals
       updateGPSGoals.previousGoals = gps_goals;
@@ -1003,14 +1003,14 @@
     }
 
     // Function to add a new GPS point to the map with orientation and color gradient
-    function updateGPS(gps_dict, key, color, icon_shape='arrow') {
+    function updateGPS(gps_dict, key, color, icon_shape = 'arrow') {
       const { lat, lng, heading } = gps_dict;
-      
+
       // Initialize the key in the dictionary if not present
       if (!gpsMarkersDict[key]) {
         gpsMarkersDict[key] = [];
       }
-      
+
       // Remove the oldest marker if we already have 10 markers
       if (gpsMarkersDict[key].length >= 1) {
         const oldestMarker = gpsMarkersDict[key].shift();
@@ -1037,7 +1037,7 @@
     }
 
     // Function to create an arrow icon with the given heading
-    function createIcon(heading, shape='arrow', color='blue', opacity=1) {
+    function createIcon(heading, shape = 'arrow', color = 'blue', opacity = 1) {
       const rotation = heading; // Already in degrees
 
       let svgIcon = undefined;
