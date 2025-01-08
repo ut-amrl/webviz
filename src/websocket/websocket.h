@@ -105,7 +105,7 @@ struct DataMessage {
       const amrl_msgs::VisualizationMsg& global_msg,
       const amrl_msgs::Localization2DMsg& localization_msg,
       const amrl_msgs::GPSArrayMsg& gps_route_msg,
-      const std_msgs::Float64MultiArray& gps_pose_msg);
+      const amrl_msgs::GPSMsg& gps_pose_msg);
 };
 
 class RobotWebSocket : public QObject {
@@ -119,7 +119,7 @@ class RobotWebSocket : public QObject {
             const sensor_msgs::LaserScan& laser_lowbeam_scan,
             const amrl_msgs::Localization2DMsg& localization,
             const amrl_msgs::GPSArrayMsg& gps_goals_msg,
-            const std_msgs::Float64MultiArray& gps_pose);
+            const amrl_msgs::GPSMsg& gps_pose);
 
  Q_SIGNALS:
   void closed();
@@ -151,7 +151,7 @@ class RobotWebSocket : public QObject {
   sensor_msgs::LaserScan laser_lowbeam_scan_;
   amrl_msgs::Localization2DMsg localization_;
   amrl_msgs::GPSArrayMsg gps_goals_msg_;
-  std_msgs::Float64MultiArray gps_pose_;
+  amrl_msgs::GPSMsg gps_pose_;
 };
 
 #endif  // ECHOSERVER_H

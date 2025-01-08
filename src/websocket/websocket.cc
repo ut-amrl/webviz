@@ -40,10 +40,12 @@
 #include "amrl_msgs/Localization2DMsg.h"
 #include "amrl_msgs/Point2D.h"
 #include "amrl_msgs/VisualizationMsg.h"
+#include "amrl_msgs/GPSMsg.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include "sensor_msgs/LaserScan.h"
 
+using amrl_msgs::GPSMsg;
 using amrl_msgs::ColoredArc2D;
 using amrl_msgs::ColoredLine2D;
 using amrl_msgs::ColoredPoint2D;
@@ -69,7 +71,9 @@ RobotWebSocket::RobotWebSocket(uint16_t port)
   localization_.pose.x = 0;
   localization_.pose.y = 0;
   localization_.pose.theta = 0;
-  gps_pose_.data = {0, 30.2861, -97.7394, 0, 0};  // UT Austin
+  gps_pose_.latitude = 30.2861;
+  gps_pose_.longitude = -97.7394;
+  gps_pose_.heading = 0.0;  // UT Austin
   connect(this, &RobotWebSocket::SendDataSignal, this,
           &RobotWebSocket::SendDataSlot);
   if (ws_server_->listen(QHostAddress::Any, port)) {
@@ -195,7 +199,7 @@ DataMessage DataMessage::FromRosMessages(
     const VisualizationMsg& global_msg,
     const Localization2DMsg& localization_msg,
     const GPSArrayMsg& gps_goals_msg,
-    const Float64MultiArray& gps_msg) {
+    const GPSMsg& gps_msg) {
   static const bool kDebug = false;
   DataMessage msg;
   for (size_t i = 0; i < sizeof(msg.header.map); ++i) {
@@ -204,9 +208,9 @@ DataMessage DataMessage::FromRosMessages(
   msg.header.loc_x = localization_msg.pose.x;
   msg.header.loc_y = localization_msg.pose.y;
   msg.header.loc_r = localization_msg.pose.theta;
-  msg.header.lat = gps_msg.data[1];
-  msg.header.lng = gps_msg.data[2];
-  msg.header.heading = gps_msg.data[4];
+  msg.header.lat = gps_msg.latitude;
+  msg.header.lng = gps_msg.longitude;
+  msg.header.heading = gps_msg.heading;
   // Copy over GPS route
   msg.header.route[0] = gps_goals_msg.data.size();
   for (size_t i = 0; i < gps_goals_msg.data.size(); i++) {
@@ -428,7 +432,7 @@ void RobotWebSocket::Send(const VisualizationMsg& local_vis,
                           const LaserScan& laser_lowbeam_scan,
                           const Localization2DMsg& localization,
                           const GPSArrayMsg& gps_goals_msg,
-                          const Float64MultiArray& gps_pose) {
+                          const GPSMsg& gps_pose) {
   data_mutex_.lock();
   localization_ = localization;
   local_vis_ = local_vis;

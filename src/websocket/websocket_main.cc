@@ -64,7 +64,6 @@ amrl_msgs::graphNavGPSSrv srv;
 amrl_msgs::Localization2DMsg amrl_initial_pose_msg_;
 amrl_msgs::Localization2DMsg amrl_nav_goal_msg_;
 std_msgs::Empty reset_nav_goals_msg_;
-Float64MultiArray gps_pose_msg_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
 LaserScan laser_lowbeam_scan_;
@@ -93,8 +92,9 @@ void LaserLowBeamCallback(const LaserScan &msg) {
 }
 
 
-void GPSPoseCallback(const Float64MultiArray &msg) {
-  gps_pose_msg_ = msg;
+void GPSPoseCallback(const GPSMsg &msg) {
+  robot_gps_msg_ = msg;
+  updates_pending_ = true;
 }
 
 void VisualizationCallback(const VisualizationMsg &msg) {
@@ -166,7 +166,7 @@ void SendUpdate() {
   }
 
   server_->Send(local_msgs, global_msgs, laser_scan_, laser_lowbeam_scan_, 
-    localization_msg_, gps_goals_msg_, gps_pose_msg_);
+    localization_msg_, gps_goals_msg_, robot_gps_msg_);
 }
 
 void SetInitialPose(float x, float y, float theta, QString map) {
@@ -268,7 +268,7 @@ void *RosThread(void *arg) {
       n.subscribe("/visualization", 10, &VisualizationCallback);
   ros::Subscriber localization_sub =
       n.subscribe("/localization", 10, &LocalizationCallback);
-  ros::Subscriber gps_pose_sub = n.subscribe("/phone/gps_with_heading", 10, &GPSPoseCallback);
+  ros::Subscriber gps_pose_sub = n.subscribe("/vectornav/GPSHeading", 10, &GPSPoseCallback);
   init_loc_pub_ =
       n.advertise<geometry_msgs::PoseWithCovarianceStamped>("/initialpose", 10);
   nav_goal_pub_ =
@@ -322,7 +322,6 @@ void InitMessage() {
   initial_pose_msg_.pose.pose.orientation.z = 0;
   gps_goals_msg_.header.stamp = ros::Time(0);
   gps_goals_msg_.data.clear();
-  gps_pose_msg_.data = {0, 0, 0, 0, 0};
   nav_goal_msg_.header = initial_pose_msg_.header;
 }
 
