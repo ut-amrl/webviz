@@ -1275,7 +1275,7 @@
       if (!lastLaserScan) return;
       let offset = { x: 0, y: 0, theta: 0 };
       if (robotPose) {
-        // Note: Assumes the laser is at (0.2, 0) on the robot.
+        // Note: Assumes the laser is at (0.1, 0) on the robot.
         const laserOffset = 0.2;
         offset = {
           x: robotPose.x + laserOffset * Math.cos(robotPose.theta),
