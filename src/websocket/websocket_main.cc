@@ -15,8 +15,7 @@
 /*!
  * \file    websocket_main.cpp
  * \brief   Main entry point for websocket bridge, ROS1/ROS2 cross-compat.
- * \author  (original) Joydeep Biswas, (C) 2019
- * \author  (refactor) Your Name
+ * \author  Joydeep Biswas, (C) 2019
  */
 //========================================================================
 
@@ -28,13 +27,14 @@
 
 #include "websocket.h"
 #include "ros_adapter.h"
+#include "websocket_flags.h"
 
-#ifdef USE_ROS1
+#ifdef ROS1
   #include <ros/ros.h>
   #include "util/timer.h"  // For RateLoop
 #endif
 
-#ifdef USE_ROS2
+#ifdef ROS2
   #include "rclcpp/rclcpp.hpp"
 #endif
 
@@ -64,7 +64,7 @@ void* RosThread(void*) {
   pthread_detach(pthread_self());
   CHECK_NOTNULL(server_.get());  // Just a safety check
 
-#ifdef USE_ROS1
+#ifdef ROS1
   // ROS1: Create NodeHandle, init the RosAdapter for ROS1
   ros::NodeHandle nh;
   ros_adapter_->InitRos1(nh);
@@ -72,7 +72,7 @@ void* RosThread(void*) {
   RateLoop loop(FLAGS_fps);
   while (ros::ok() && run_) {
     ros::spinOnce();
-    // You could call server_->SendUpdate() or similar, if needed
+    ros_adapter_->SendUpdate();
     loop.Sleep();
   }
   // If we exit the loop, thread terminates
@@ -80,15 +80,17 @@ void* RosThread(void*) {
   return nullptr;
 #endif
 
-#ifdef USE_ROS2
+#ifdef ROS2
   // ROS2: Create node, init the RosAdapter for ROS2
   auto node = rclcpp::Node::make_shared("websocket_node");
+  printf("ROS2 Node created.\n");
   ros_adapter_->InitRos2(node);
+  printf("ROS2 Node initialized.\n");
 
   rclcpp::Rate loop(FLAGS_fps);
   while (rclcpp::ok() && run_) {
     rclcpp::spin_some(node);
-    // Possibly call server_->SendUpdate() or something similar
+    ros_adapter_->SendUpdate();
     loop.sleep();
   }
   // If done, shutdown ROS2 before exiting
@@ -97,7 +99,7 @@ void* RosThread(void*) {
   return nullptr;
 #endif
 
-  // If neither USE_ROS1 nor USE_ROS2 is defined, we do nothing 
+  // If neither ROS1 nor ROS2 is defined, we do nothing 
   pthread_exit(nullptr);
   return nullptr;
 }
@@ -105,12 +107,12 @@ void* RosThread(void*) {
 int main(int argc, char *argv[]) {
   google::ParseCommandLineFlags(&argc, &argv, false);
 
-#ifdef USE_ROS1
+#ifdef ROS1
   // Initialize ROS1 but disable the default SIGINT handler
   ros::init(argc, argv, "websocket", ros::init_options::NoSigintHandler);
 #endif
 
-#ifdef USE_ROS2
+#ifdef ROS2
   // Initialize ROS2
   rclcpp::init(argc, argv);
 #endif
