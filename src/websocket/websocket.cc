@@ -230,7 +230,7 @@ RobotWebSocket::RobotWebSocket(uint16_t port)
 
   // Connect the Qt signal that triggers sending data
   connect(this, &RobotWebSocket::SendDataSignal, this, &RobotWebSocket::SendDataSlot);
-
+  qDebug("Initializing RobotWebSocket");
   // Listen on the given port
   if (ws_server_->listen(QHostAddress::Any, port)) {
     qDebug() << "Listening on port" << port;
@@ -238,6 +238,8 @@ RobotWebSocket::RobotWebSocket(uint16_t port)
             this, &RobotWebSocket::onNewConnection);
     connect(ws_server_, &QWebSocketServer::closed,
             this, &RobotWebSocket::closed);
+  } else {
+    qDebug("Failed to listen on port %d", port);
   }
 }
 

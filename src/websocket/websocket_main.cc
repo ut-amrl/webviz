@@ -83,9 +83,7 @@ void* RosThread(void*) {
 #ifdef ROS2
   // ROS2: Create node, init the RosAdapter for ROS2
   auto node = rclcpp::Node::make_shared("websocket_node");
-  printf("ROS2 Node created.\n");
   ros_adapter_->InitRos2(node);
-  printf("ROS2 Node initialized.\n");
 
   rclcpp::Rate loop(FLAGS_fps);
   while (rclcpp::ok() && run_) {
