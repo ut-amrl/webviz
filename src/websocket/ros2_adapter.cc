@@ -49,6 +49,7 @@ RosAdapter::RosAdapter(std::weak_ptr<RobotWebSocket> ws)
 
 // Initialize all ROS2 pubs/subs/services
 void RosAdapter::InitRos2(std::shared_ptr<rclcpp::Node> node) {
+  node_ = node;
   // Service client
   gps_service_client_ = node->create_client<GraphNavGPSSrv>("graphNavGPSSrv");
   // Subscribers (ROS2)
@@ -170,12 +171,10 @@ void RosAdapter::SetGPSGoal(float start_lat, float start_lon, float end_lat, flo
     printf("Set gps goal: %f, %f\n", end_lat, end_lon);
   }
 
-  // Create and populate the service request.
-  // Here we assume you have a member variable 'srv_' of type GraphNavGPSSrv::Request.
+  // Get current time from ROS2 clock.
   auto now = rclcpp::Clock().now();
-  
 
-
+  // Populate the service request.
   gps_service_request_.start.header.stamp = now;
   gps_service_request_.start.latitude = start_lat;
   gps_service_request_.start.longitude = start_lon;
@@ -191,25 +190,25 @@ void RosAdapter::SetGPSGoal(float start_lat, float start_lon, float end_lat, flo
   gps_goals_msg_.data = { goal_msg };
 
   gps_service_request_.goals = gps_goals_msg_;
-
-  // Synchronous service call (for demonstration)
-  // In a production system, consider using async_send_request and handling the future.
-  auto result_future = gps_service_client_->async_send_request(std::make_shared<GraphNavGPSSrv::Request>(gps_service_request_));
   
-  // Wait for the result (you might add a timeout in production)
-  if (rclcpp::spin_until_future_complete(rclcpp::Node::make_shared("temp_node"), result_future)
-      == rclcpp::FutureReturnCode::SUCCESS) {
-    auto response = result_future.get();
-    gps_goals_msg_ = response->plan;
-    if (FLAGS_v > 0) {
-      for (const auto &gps_goal : gps_goals_msg_.data) {
-        RCLCPP_INFO(rclcpp::get_logger("websocket"), "Path point: %f, %f",
-                    gps_goal.latitude, gps_goal.longitude);
-      }
-    }
-  } else {
-    RCLCPP_ERROR(rclcpp::get_logger("websocket"), "Service call failed");
-  }
+  // Send the service request asynchronously.
+  auto request_ptr = std::make_shared<GraphNavGPSSrv::Request>(gps_service_request_);
+  gps_service_client_->async_send_request(
+      request_ptr,
+      [this](rclcpp::Client<GraphNavGPSSrv>::SharedFuture future) {
+        auto response = future.get();
+        if (response) {
+          gps_goals_msg_ = response->plan;
+          if (FLAGS_v > 0) {
+            for (const auto &gps_goal : gps_goals_msg_.data) {
+              RCLCPP_INFO(rclcpp::get_logger("websocket"),
+                          "Path point: %f, %f", gps_goal.latitude, gps_goal.longitude);
+            }
+          }
+        } else {
+          RCLCPP_ERROR(rclcpp::get_logger("websocket"), "Service call failed");
+        }
+      });
 }
 
 //

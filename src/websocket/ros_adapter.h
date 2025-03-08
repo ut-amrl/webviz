@@ -108,6 +108,7 @@ class RosAdapter {
   void SendUpdate();
 
  private:
+  rclcpp::Node::SharedPtr node_;
   // ROS2 callbacks:
   void LocalizationCallbackRos2(const Localization2DMsg::SharedPtr msg);
   void LaserCallbackRos2(const LaserScan::SharedPtr msg);
