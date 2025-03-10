@@ -948,59 +948,59 @@
     }
 
     function updateGPSGoals(gps_goals, key, color) {
-      // Use a static variable to store the previous goals
-      updateGPSGoals.previousGoals = updateGPSGoals.previousGoals || [];
+      // Create a string signature for the incoming goals array.
+      let newSignature = JSON.stringify(gps_goals);
+      // Use a static variable to store the previous signature.
+      updateGPSGoals.previousSignature = updateGPSGoals.previousSignature || "";
 
-      // Check if the last goal has changed approximately
-      const lastGoal = updateGPSGoals.previousGoals[updateGPSGoals.previousGoals.length - 1];
-      const newGoal = gps_goals[gps_goals.length - 1];
-      if (lastGoal != undefined && compareGPS(lastGoal, newGoal)) {
+      // If the signature hasn't changed, skip updating.
+      if (newSignature === updateGPSGoals.previousSignature) {
         return;
       }
 
-      gpsGoalMarkers = gpsMarkersDict[key] || [];
-      // Update the static variable to the new goals
-      updateGPSGoals.previousGoals = gps_goals;
+      // Otherwise, update the stored signature.
+      updateGPSGoals.previousSignature = newSignature;
 
-      // Clear previous GPS goal markers from the map
+      console.log("Updating GPS Goals:", gps_goals);
+
+      // Clear previous markers.
+      let gpsGoalMarkers = gpsMarkersDict[key] || [];
       gpsGoalMarkers.forEach(marker => {
         osm_map.removeLayer(marker);
       });
-      gpsGoalMarkers = []; // Reset the marker array
+      gpsGoalMarkers = []; // Reset marker array
 
-      // Replot the GPS markers based on the updated gps_goals
-      console.log("GPS Goals updated:", gps_goals);
-      const numGoals = gps_goals.shift();
+      // Assume the first element is a count; extract it.
+      const numGoals = parseInt(gps_goals[0], 10);
+      // Create an array of goal objects (excluding the count)
+      let goalsToPlot = gps_goals.slice(1);
+
       if (numGoals > 0) {
-        gps_goals.forEach((goal, index) => {
+        goalsToPlot.forEach((goal, index) => {
           if (index >= numGoals) {
             return;
           }
-          // Customize marker color and opacity based on position in the path
-          const color = 'blue';
-          // const opacity = (index + 1) / gps_goals.length;
+          // Customize marker appearance.
+          const markerColor = color || 'blue';
           const opacity = 0.5;
-
-          // Create an icon for each GPS goal
           const icon = L.divIcon({
             className: 'gps-goal-marker',
-            html: `<div style="background-color: ${color}; opacity: ${opacity}; width: 10px; height: 10px; border-radius: 50%;"></div>`,
+            html: `<div style="background-color: ${markerColor}; opacity: ${opacity}; width: 10px; height: 10px; border-radius: 50%;"></div>`,
             iconSize: [10, 10],
           });
-
-          // Create a marker and add it to the map
+          // Create a marker and add it to the map.
           const marker = L.marker([goal.lat, goal.lng], { icon }).addTo(osm_map);
-          gpsGoalMarkers.push(marker); // Add marker to the global array
+          gpsGoalMarkers.push(marker);
         });
-
-        // Optionally pan to the last goal or center of all goals
-        const lastGoal = gps_goals[gps_goals.length - 1];
-        // osm_map.panTo([lastGoal.lat, lastGoal.lng]);
-
-        // Update the dictionary with the new markers
         gpsMarkersDict[key] = gpsGoalMarkers;
+        // Optionally, pan to the last goal.
+        const lastGoal = goalsToPlot[goalsToPlot.length - 1];
+        if (lastGoal) {
+          osm_map.panTo([lastGoal.lat, lastGoal.lng]);
+        }
       }
     }
+
 
     // Function to add a new GPS point to the map with orientation and color gradient
     function updateGPS(gps_dict, key, color, icon_shape = 'arrow') {
