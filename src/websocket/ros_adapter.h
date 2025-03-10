@@ -1,66 +1,70 @@
 #pragma once
 
-#include <memory>
-#include <mutex> // For std::mutex if needed
-
 #include <QtCore/QObject>
+#include <memory>
+#include <mutex>  // For std::mutex if needed
+#include <vector>
+
 #include "websocket_flags.h"
 
 // Forward-declare RobotWebSocket so we can store a (weak) pointer to it.
 class RobotWebSocket;
+
+using std::vector;
 
 /* ------------------------------------------------------------------
  * Conditionally include ROS1 vs. ROS2 headers and define type aliases.
  * ------------------------------------------------------------------
  */
 #ifdef ROS1
-  #include <ros/ros.h>
-  #include "amrl_msgs/Localization2DMsg.h"
-  #include "amrl_msgs/VisualizationMsg.h"
-  #include "amrl_msgs/GPSArrayMsg.h"
-  #include "amrl_msgs/GPSMsg.h"
-  #include "amrl_msgs/graphNavGPSSrv.h"
-  #include "geometry_msgs/PoseWithCovarianceStamped.h"
-  #include "geometry_msgs/PoseStamped.h"
-  #include "sensor_msgs/LaserScan.h"
-  #include "std_msgs/Empty.h"
+#include <ros/ros.h>
 
-  // ---------------------
-  // Using-declarations
-  // ---------------------
-  using LaserScan                   = sensor_msgs::LaserScan;
-  using Localization2DMsg           = amrl_msgs::Localization2DMsg;
-  using VisualizationMsg            = amrl_msgs::VisualizationMsg;
-  using GPSArrayMsg                 = amrl_msgs::GPSArrayMsg;
-  using GPSMsg                      = amrl_msgs::GPSMsg;
-  using GraphNavGPSSrv              = amrl_msgs::graphNavGPSSrv; 
-  using PoseWithCovarianceStamped   = geometry_msgs::PoseWithCovarianceStamped;
-  using PoseStamped                 = geometry_msgs::PoseStamped;
-  using Empty                       = std_msgs::Empty;
+#include "amrl_msgs/GPSArrayMsg.h"
+#include "amrl_msgs/GPSMsg.h"
+#include "amrl_msgs/Localization2DMsg.h"
+#include "amrl_msgs/VisualizationMsg.h"
+#include "amrl_msgs/graphNavGPSSrv.h"
+#include "geometry_msgs/PoseStamped.h"
+#include "geometry_msgs/PoseWithCovarianceStamped.h"
+#include "sensor_msgs/LaserScan.h"
+#include "std_msgs/Empty.h"
+
+// ---------------------
+// Using-declarations
+// ---------------------
+using LaserScan = sensor_msgs::LaserScan;
+using Localization2DMsg = amrl_msgs::Localization2DMsg;
+using VisualizationMsg = amrl_msgs::VisualizationMsg;
+using GPSArrayMsg = amrl_msgs::GPSArrayMsg;
+using GPSMsg = amrl_msgs::GPSMsg;
+using GraphNavGPSSrv = amrl_msgs::graphNavGPSSrv;
+using PoseWithCovarianceStamped = geometry_msgs::PoseWithCovarianceStamped;
+using PoseStamped = geometry_msgs::PoseStamped;
+using Empty = std_msgs::Empty;
 #else
-  #include "rclcpp/rclcpp.hpp"
-  #include "amrl_msgs/msg/localization2_d_msg.hpp"
-  #include "amrl_msgs/msg/visualization_msg.hpp"
-  #include "amrl_msgs/msg/gps_array_msg.hpp"
-  #include "amrl_msgs/msg/gps_msg.hpp"
-  #include "amrl_msgs/srv/graph_nav_gps_srv.hpp"
-  #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
-  #include "geometry_msgs/msg/pose_stamped.hpp"
-  #include "sensor_msgs/msg/laser_scan.hpp"
-  #include "std_msgs/msg/empty.hpp"
+#include "amrl_msgs/msg/gps_array_msg.hpp"
+#include "amrl_msgs/msg/gps_msg.hpp"
+#include "amrl_msgs/msg/localization2_d_msg.hpp"
+#include "amrl_msgs/msg/visualization_msg.hpp"
+#include "amrl_msgs/srv/graph_nav_gps_srv.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
+#include "std_msgs/msg/empty.hpp"
 
-  // ---------------------
-  // Using-declarations
-  // ---------------------
-  using LaserScan                  = sensor_msgs::msg::LaserScan;
-  using Localization2DMsg          = amrl_msgs::msg::Localization2DMsg;
-  using VisualizationMsg           = amrl_msgs::msg::VisualizationMsg;
-  using GPSArrayMsg                = amrl_msgs::msg::GPSArrayMsg;
-  using GPSMsg                     = amrl_msgs::msg::GPSMsg;
-  using GraphNavGPSSrv             = amrl_msgs::srv::GraphNavGPSSrv;
-  using PoseWithCovarianceStamped  = geometry_msgs::msg::PoseWithCovarianceStamped;
-  using PoseStamped                = geometry_msgs::msg::PoseStamped;
-  using Empty                      = std_msgs::msg::Empty;
+// ---------------------
+// Using-declarations
+// ---------------------
+using LaserScan = sensor_msgs::msg::LaserScan;
+using Localization2DMsg = amrl_msgs::msg::Localization2DMsg;
+using VisualizationMsg = amrl_msgs::msg::VisualizationMsg;
+using GPSArrayMsg = amrl_msgs::msg::GPSArrayMsg;
+using GPSMsg = amrl_msgs::msg::GPSMsg;
+using GraphNavGPSSrv = amrl_msgs::srv::GraphNavGPSSrv;
+using PoseWithCovarianceStamped = geometry_msgs::msg::PoseWithCovarianceStamped;
+using PoseStamped = geometry_msgs::msg::PoseStamped;
+using Empty = std_msgs::msg::Empty;
 #endif
 
 ///
@@ -98,7 +102,7 @@ class RosAdapter {
   ros::Publisher amrl_nav_goal_pub_;
   ros::Publisher reset_nav_goals_pub_;
   ros::ServiceClient gps_service_client_;
-#else 
+#else
  public:
   // Called by the ROS2 version of the code to initialize everything.
   void InitRos2(std::shared_ptr<rclcpp::Node> node);
@@ -118,13 +122,14 @@ class RosAdapter {
   void SetInitialPose(float x, float y, float theta, QString map);
   void ResetNavGoals();
   void SetNavGoal(float x, float y, float theta, QString map);
-  void SetGPSGoal(float start_lat, float start_lon, float end_lat, float end_lon);
+  void SetGPSGoal(float start_lat, float start_lon, float end_lat,
+                  float end_lon);
 
   // Data storage for ROS2
   LaserScan laser_scan_;
   LaserScan laser_lowbeam_scan_;
   Localization2DMsg localization_msg_;
-  VisualizationMsg vis_msg_;
+  vector<VisualizationMsg> vis_msgs_;
   GPSMsg robot_gps_msg_;
   GPSArrayMsg gps_goals_msg_;
   bool updates_pending_ = false;
@@ -152,5 +157,5 @@ class RosAdapter {
 
   rclcpp::Client<GraphNavGPSSrv>::SharedPtr gps_service_client_;
   GraphNavGPSSrv::Request gps_service_request_;
-#endif // ROS2
+#endif  // ROS2
 };
