@@ -43,7 +43,7 @@ void RosAdapter::InitRos2(std::shared_ptr<rclcpp::Node> node) {
   gps_service_client_ = node->create_client<GraphNavGPSSrv>("graphNavGPSSrv");
   // Subscribers (ROS2)
   laser_sub_ = node->create_subscription<LaserScan>(
-      "/velodyne_2dscan_high_beams", 5,
+      "/scan", 5,
       std::bind(&RosAdapter::LaserCallbackRos2, this, std::placeholders::_1));
 
   laser_lowbeam_sub_ = node->create_subscription<LaserScan>(
