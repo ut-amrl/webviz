@@ -499,7 +499,13 @@
       xhr.onload = function () {
         var status = xhr.status;
         if (status === 200) {
-          map = JSON.parse(xhr.response);
+          try {
+            map = JSON.parse(xhr.response);
+          } catch (e) {
+            console.error(`Error parsing map: ${e}`);
+            map = [];
+            return;
+          }
           console.log(`Loaded map "${mapName}"`);
         } else {
           console.log(`Error loading map "${mapName}"`);
