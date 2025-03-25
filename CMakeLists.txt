@@ -166,6 +166,7 @@ install(TARGETS websocket
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 # If we’re building with ROS2, finalize with ament_package()
