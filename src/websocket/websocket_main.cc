@@ -19,26 +19,50 @@
  */
 //========================================================================
 #include <QtCore/QCoreApplication>
+#include <QtCore/QTimer>
 #include <algorithm>
 #include <vector>
+#include <signal.h>
+#include <atomic>
+#include <unistd.h>
+#include <cstdlib>
 
+#ifdef ROS2
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "std_msgs/msg/empty.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
+#include "amrl_msgs/msg/visualization_msg.hpp"
+#include "amrl_msgs/msg/localization2_d_msg.hpp"
+using amrl_msgs::msg::Localization2DMsg;
+using amrl_msgs::msg::VisualizationMsg;
+using geometry_msgs::msg::PoseStamped;
+using geometry_msgs::msg::PoseWithCovarianceStamped;
+using sensor_msgs::msg::LaserScan;
+using std_msgs::msg::Empty;
+#else
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseWithCovarianceStamped.h"
 #include "std_msgs/Empty.h"
-#include "gflags/gflags.h"
-#include "glog/logging.h"
-#include "ros/ros.h"
 #include "sensor_msgs/LaserScan.h"
-
 #include "amrl_msgs/VisualizationMsg.h"
 #include "amrl_msgs/Localization2DMsg.h"
+using amrl_msgs::Localization2DMsg;
+using amrl_msgs::VisualizationMsg;
+using geometry_msgs::PoseStamped;
+using geometry_msgs::PoseWithCovarianceStamped;
+using sensor_msgs::LaserScan;
+using std_msgs::Empty;
+#endif
+
+#include "gflags/gflags.h"
+#include "glog/logging.h"
 #include "math/math_util.h"
 #include "util/timer.h"
 #include "websocket.h"
+#include "ros_compat.h"
 
-using amrl_msgs::VisualizationMsg;
-using amrl_msgs::Localization2DMsg;
-using sensor_msgs::LaserScan;
 using std::vector;
 
 DEFINE_double(fps, 10.0, "Max visualization frames rate.");
@@ -46,245 +70,281 @@ DEFINE_double(max_age, 2.0, "Maximum age of a message before it gets dropped.");
 DECLARE_int32(v);
 
 namespace {
-bool run_ = true;
+std::atomic<bool> run_(true);
 vector<VisualizationMsg> vis_msgs_;
-geometry_msgs::PoseWithCovarianceStamped initial_pose_msg_;
-geometry_msgs::PoseStamped nav_goal_msg_;
-amrl_msgs::Localization2DMsg amrl_initial_pose_msg_;
-amrl_msgs::Localization2DMsg amrl_nav_goal_msg_;
-std_msgs::Empty reset_nav_goals_msg_;
+PoseWithCovarianceStamped initial_pose_msg_;
+PoseStamped nav_goal_msg_;
+Localization2DMsg amrl_initial_pose_msg_;
+Localization2DMsg amrl_nav_goal_msg_;
+Empty reset_nav_goals_msg_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
-ros::Publisher init_loc_pub_;
-ros::Publisher amrl_init_loc_pub_;
-ros::Publisher nav_goal_pub_;
-ros::Publisher amrl_nav_goal_pub_;
-ros::Publisher reset_nav_goals_pub_;
+NodePtr node_;
+PublisherPtr<PoseWithCovarianceStamped> init_loc_pub_;
+PublisherPtr<Localization2DMsg> amrl_init_loc_pub_;
+PublisherPtr<PoseStamped> nav_goal_pub_;
+PublisherPtr<Localization2DMsg> amrl_nav_goal_pub_;
+PublisherPtr<Empty> reset_nav_goals_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
 }  // namespace
 
-void LocalizationCallback(const Localization2DMsg& msg) {
-  localization_msg_ = msg;
+void LocalizationCallback(const Localization2DMsg &msg) {
+    localization_msg_ = msg;
 }
 
-void LaserCallback(const LaserScan& msg) {
-  laser_scan_ = msg;
-  updates_pending_ = true;
+void LaserCallback(const LaserScan &msg) {
+    laser_scan_ = msg;
+    updates_pending_ = true;
 }
 
-void VisualizationCallback(const VisualizationMsg& msg) {
-  static bool warning_showed_ = false;
-  if (msg.header.frame_id != "base_link" &&
-      msg.header.frame_id != "map") {
-    if (!warning_showed_) {
-      fprintf(stderr,
-              "WARNING: Ignoring visualization for unknown frame '%s'."
-              " This message prints only once.\n",
-              msg.header.frame_id.c_str());
-      warning_showed_ = true;
+void VisualizationCallback(const VisualizationMsg &msg) {
+    static bool warning_showed_ = false;
+    if (msg.header.frame_id != "base_link" &&
+        msg.header.frame_id != "map") {
+        if (!warning_showed_) {
+            fprintf(stderr,
+                    "WARNING: Ignoring visualization for unknown frame '%s'."
+                    " This message prints only once.\n",
+                    msg.header.frame_id.c_str());
+            warning_showed_ = true;
+        }
+        return;
     }
-    return;
-  }
-  auto prev_msg =
-      std::find_if(vis_msgs_.begin(),
-                   vis_msgs_.end(),
-                   [&msg](const VisualizationMsg &m) {
-                     return m.ns == msg.ns;
-                   });
-  if (prev_msg == vis_msgs_.end()) {
-    vis_msgs_.push_back(msg);
-  } else {
-    *prev_msg = msg;
-  }
-  updates_pending_ = true;
+    auto prev_msg =
+        std::find_if(vis_msgs_.begin(),
+                     vis_msgs_.end(),
+                     [&msg](const VisualizationMsg &m) {
+                         return m.ns == msg.ns;
+                     });
+    if (prev_msg == vis_msgs_.end()) {
+        vis_msgs_.push_back(msg);
+    } else {
+        *prev_msg = msg;
+    }
+    updates_pending_ = true;
 }
 
 template <typename T>
 void MergeVector(const std::vector<T> &v1, std::vector<T> *v2) {
-  v2->insert(v2->end(), v1.begin(), v1.end());
+    v2->insert(v2->end(), v1.begin(), v1.end());
 }
 
 // Merge message m1 into m2.
 void MergeMessage(const VisualizationMsg &m1,
                   VisualizationMsg *m2_ptr) {
-  VisualizationMsg &m2 = *m2_ptr;
-  MergeVector(m1.points, &m2.points);
-  MergeVector(m1.lines, &m2.lines);
-  MergeVector(m1.arcs, &m2.arcs);
-  MergeVector(m1.text_annotations, &m2.text_annotations);
+    VisualizationMsg &m2 = *m2_ptr;
+    MergeVector(m1.points, &m2.points);
+    MergeVector(m1.lines, &m2.lines);
+    MergeVector(m1.arcs, &m2.arcs);
+    MergeVector(m1.text_annotations, &m2.text_annotations);
 }
 
 void DropOldMessages() {
-  const auto now = ros::Time::now();
-  if ((now - laser_scan_.header.stamp).toSec() > FLAGS_max_age) {
-    laser_scan_.header.stamp = ros::Time(0);
-  }
-  std::remove_if(
-      vis_msgs_.begin(),
-      vis_msgs_.end(),
-      [&now](const VisualizationMsg &m) {
-        return ((now - m.header.stamp).toSec() > FLAGS_max_age);
-      });
+    const auto now = GET_TIME();
+#ifdef ROS2
+    if ((now - rclcpp::Time(laser_scan_.header.stamp)).seconds() > FLAGS_max_age) {
+        laser_scan_.header.stamp = ZERO_TIME();
+    }
+    std::remove_if(
+        vis_msgs_.begin(),
+        vis_msgs_.end(),
+        [&now](const VisualizationMsg &m) {
+            return ((now - rclcpp::Time(m.header.stamp)).seconds() > FLAGS_max_age);
+        });
+#else
+    if ((now - laser_scan_.header.stamp).toSec() > FLAGS_max_age) {
+        laser_scan_.header.stamp = ZERO_TIME();
+    }
+    std::remove_if(
+        vis_msgs_.begin(),
+        vis_msgs_.end(),
+        [&now](const VisualizationMsg &m) {
+            return ((now - m.header.stamp).toSec() > FLAGS_max_age);
+        });
+#endif
 }
 
 void SendUpdate() {
-  if (server_ == nullptr || !updates_pending_) {
-    return;
-  }
-  // DropOldMessages();
-  updates_pending_ = false;
-  if (laser_scan_.header.stamp.toSec() == 0 && vis_msgs_.empty()) {
-    return;
-  }
-  VisualizationMsg local_msgs;
-  VisualizationMsg global_msgs;
-  for (const VisualizationMsg &m : vis_msgs_) {
-    // std::cout << m << std::endl;
-    if (m.header.frame_id == "map") {
-      MergeMessage(m, &global_msgs);
-    } else {
-      MergeMessage(m, &local_msgs);
+    if (server_ == nullptr || !updates_pending_) {
+        return;
     }
-  }
-  server_->Send(local_msgs,
-                global_msgs,
-                laser_scan_,
-                localization_msg_);
+    // DropOldMessages();
+    updates_pending_ = false;
+#ifdef ROS2
+    if (laser_scan_.header.stamp.sec == 0 && vis_msgs_.empty()) {
+        return;
+    }
+#else
+    if (laser_scan_.header.stamp.toSec() == 0 && vis_msgs_.empty()) {
+        return;
+    }
+#endif
+    VisualizationMsg local_msgs;
+    VisualizationMsg global_msgs;
+    for (const VisualizationMsg &m : vis_msgs_) {
+        // std::cout << m << std::endl;
+        if (m.header.frame_id == "map") {
+            MergeMessage(m, &global_msgs);
+        } else {
+            MergeMessage(m, &local_msgs);
+        }
+    }
+    server_->Send(local_msgs,
+                  global_msgs,
+                  laser_scan_,
+                  localization_msg_);
 }
 
 void SetInitialPose(float x, float y, float theta, QString map) {
-  if (FLAGS_v > 0) {
-    printf("Set initial pose: %s %f,%f, %f\n",
-        map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
-  }
-  initial_pose_msg_.header.stamp = ros::Time::now();
-  initial_pose_msg_.pose.pose.position.x = x;
-  initial_pose_msg_.pose.pose.position.y = y;
-  initial_pose_msg_.pose.pose.orientation.w = cos(0.5 * theta);
-  initial_pose_msg_.pose.pose.orientation.z = sin(0.5 * theta);
-  init_loc_pub_.publish(initial_pose_msg_);
-  amrl_initial_pose_msg_.header.stamp = ros::Time::now();
-  amrl_initial_pose_msg_.map = map.toStdString();
-  amrl_initial_pose_msg_.pose.x = x;
-  amrl_initial_pose_msg_.pose.y = y;
-  amrl_initial_pose_msg_.pose.theta = theta;
-  amrl_init_loc_pub_.publish(amrl_initial_pose_msg_);
+    if (FLAGS_v > 0) {
+        printf("Set initial pose: %s %f,%f, %f\n",
+               map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
+    }
+    initial_pose_msg_.header.stamp = GET_TIME();
+    initial_pose_msg_.pose.pose.position.x = x;
+    initial_pose_msg_.pose.pose.position.y = y;
+    initial_pose_msg_.pose.pose.orientation.w = cos(0.5 * theta);
+    initial_pose_msg_.pose.pose.orientation.z = sin(0.5 * theta);
+    PUBLISH(init_loc_pub_, initial_pose_msg_);
+    amrl_initial_pose_msg_.header.stamp = GET_TIME();
+    amrl_initial_pose_msg_.map = map.toStdString();
+    amrl_initial_pose_msg_.pose.x = x;
+    amrl_initial_pose_msg_.pose.y = y;
+    amrl_initial_pose_msg_.pose.theta = theta;
+    PUBLISH(amrl_init_loc_pub_, amrl_initial_pose_msg_);
 }
 
 void ResetNavGoals() {
-  if (FLAGS_v > 0) {
-    printf("Reset nav goals.\n");
-  }
-  reset_nav_goals_pub_.publish(reset_nav_goals_msg_);
+    if (FLAGS_v > 0) {
+        printf("Reset nav goals.\n");
+    }
+    PUBLISH(reset_nav_goals_pub_, reset_nav_goals_msg_);
 }
 
 void SetNavGoal(float x, float y, float theta, QString map) {
-  if (FLAGS_v > 0) {
-    printf("Set nav goal: %s %f,%f, %f\n",
-        map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
-  }
-  nav_goal_msg_.header.stamp = ros::Time::now();
-  nav_goal_msg_.pose.position.x = x;
-  nav_goal_msg_.pose.position.y = y;
-  nav_goal_msg_.pose.orientation.w = cos(0.5 * theta);
-  nav_goal_msg_.pose.orientation.z = sin(0.5 * theta);
-  nav_goal_pub_.publish(nav_goal_msg_);
-  amrl_nav_goal_msg_.header.stamp = ros::Time::now();
-  amrl_nav_goal_msg_.map = map.toStdString();
-  amrl_nav_goal_msg_.pose.x = x;
-  amrl_nav_goal_msg_.pose.y = y;
-  amrl_nav_goal_msg_.pose.theta = theta;
-  amrl_nav_goal_pub_.publish(amrl_nav_goal_msg_);
+    if (FLAGS_v > 0) {
+        printf("Set nav goal: %s %f,%f, %f\n",
+               map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
+    }
+    nav_goal_msg_.header.stamp = GET_TIME();
+    nav_goal_msg_.pose.position.x = x;
+    nav_goal_msg_.pose.position.y = y;
+    nav_goal_msg_.pose.orientation.w = cos(0.5 * theta);
+    nav_goal_msg_.pose.orientation.z = sin(0.5 * theta);
+    PUBLISH(nav_goal_pub_, nav_goal_msg_);
+    amrl_nav_goal_msg_.header.stamp = GET_TIME();
+    amrl_nav_goal_msg_.map = map.toStdString();
+    amrl_nav_goal_msg_.pose.x = x;
+    amrl_nav_goal_msg_.pose.y = y;
+    amrl_nav_goal_msg_.pose.theta = theta;
+    PUBLISH(amrl_nav_goal_pub_, amrl_nav_goal_msg_);
 }
 
 void *RosThread(void *arg) {
-  pthread_detach(pthread_self());
-  CHECK_NOTNULL(server_);
-  QObject::connect(
-      server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
-  QObject::connect(
-      server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
-  QObject::connect(
-      server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
+    // Don't detach - we need to join this thread for clean shutdown
+    CHECK_NOTNULL(server_);
+    QObject::connect(
+        server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
+    QObject::connect(
+        server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
+    QObject::connect(
+        server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
 
-  ros::NodeHandle n;
-  ros::Subscriber laser_sub =
-      n.subscribe("/scan", 5, &LaserCallback);
-  ros::Subscriber vis_sub =
-      n.subscribe("/visualization", 10, &VisualizationCallback);
-  ros::Subscriber localization_sub =
-      n.subscribe("/localization", 10, &LocalizationCallback);
-  init_loc_pub_ =
-      n.advertise<geometry_msgs::PoseWithCovarianceStamped>("/initialpose", 10);
-  nav_goal_pub_ =
-      n.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 10);
-  amrl_init_loc_pub_ =
-      n.advertise<amrl_msgs::Localization2DMsg>("/set_pose", 10);
-  amrl_nav_goal_pub_ =
-      n.advertise<amrl_msgs::Localization2DMsg>("/set_nav_target", 10);
-  reset_nav_goals_pub_ =
-      n.advertise<std_msgs::Empty>("/reset_nav_goals", 10);
+    node_ = CREATE_NODE("websocket");
 
-  RateLoop loop(FLAGS_fps);
-  while (ros::ok() && run_) {
-    // Consume all pending messages.
-    ros::spinOnce();
-    // Update rate is throttled by the rate loop timer.
-    SendUpdate();
-    loop.Sleep();
-  }
+#ifdef ROS2
+    // ROS2 callback setup with lambda wrappers
+    auto laser_callback = [](const LaserScan::SharedPtr msg) {
+        LaserCallback(*msg);
+    };
+    auto vis_callback = [](const VisualizationMsg::SharedPtr msg) {
+        VisualizationCallback(*msg);
+    };
+    auto loc_callback = [](const Localization2DMsg::SharedPtr msg) {
+        LocalizationCallback(*msg);
+    };
 
-  pthread_exit(NULL);
-  return nullptr;
+    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, "/scan", 5, laser_callback);
+    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, "/visualization", 10, vis_callback);
+    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, "/localization", 10, loc_callback);
+#else
+    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, "/scan", 5, &LaserCallback);
+    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, "/visualization", 10, &VisualizationCallback);
+    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, "/localization", 10, &LocalizationCallback);
+#endif
+
+    init_loc_pub_ = CREATE_PUBLISHER(node_, PoseWithCovarianceStamped, "/initialpose", 10);
+    nav_goal_pub_ = CREATE_PUBLISHER(node_, PoseStamped, "/move_base_simple/goal", 10);
+    amrl_init_loc_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, "/set_pose", 10);
+    amrl_nav_goal_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, "/set_nav_target", 10);
+    reset_nav_goals_pub_ = CREATE_PUBLISHER(node_, Empty, "/reset_nav_goals", 10);
+
+    RateLoop loop(FLAGS_fps);
+    while (ROS_OK() && run_.load()) {
+        SendUpdate();
+        ROS_SPIN_ONCE(node_);
+        loop.Sleep();
+    }
+    return nullptr;
 }
 
 void SignalHandler(int) {
-  if (!run_) {
-    printf("Force Exit.\n");
-    exit(0);
-  }
-  printf("Exiting.\n");
-  run_ = false;
-}
-
-void InitMessage() {
-  laser_scan_.header.stamp = ros::Time(0);
-  localization_msg_.header.stamp = ros::Time(0);
-  initial_pose_msg_.header.seq = 0;
-  initial_pose_msg_.header.frame_id = "map";
-  // Copy RViz's covariance.
-  initial_pose_msg_.pose.covariance = {
-      0.25, 0, 0, 0, 0, 0,
-      0, 0.25, 0, 0, 0, 0,
-      0, 0, 0.25, 0, 0, 0,
-      0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, math_util::DegToRad(4.0)};
-  initial_pose_msg_.pose.pose.position.x = 0;
-  initial_pose_msg_.pose.pose.position.y = 0;
-  initial_pose_msg_.pose.pose.position.z = 0;
-  initial_pose_msg_.pose.pose.orientation.w = 1;
-  initial_pose_msg_.pose.pose.orientation.x = 0;
-  initial_pose_msg_.pose.pose.orientation.y = 0;
-  initial_pose_msg_.pose.pose.orientation.z = 0;
-  nav_goal_msg_.header = initial_pose_msg_.header;
+    if (!run_.load()) {
+        printf("Force Exit.\n");
+        exit(0);
+    }
+    printf("Exiting.\n");
+    run_.store(false);
 }
 
 int main(int argc, char *argv[]) {
-  ros::init(argc, argv, "websocket", ros::init_options::NoSigintHandler);
-  google::ParseCommandLineFlags(&argc, &argv, false);
-  QCoreApplication a(argc, argv);
-  server_ = new RobotWebSocket(10272);
-  QObject::connect(
-      server_, &RobotWebSocket::closed, &a, &QCoreApplication::quit);
+    google::ParseCommandLineFlags(&argc, &argv, false);
+    google::InitGoogleLogging(argv[0]);
+    // Initialize Qt application.
+    QCoreApplication app(argc, argv);
+    // Initialize ROS.
+    ROS_INIT(argc, argv, "websocket");
+    signal(SIGINT, SignalHandler);
+    signal(SIGALRM, SignalHandler);
 
-  pthread_t ros_thread_id = 0;
-  pthread_create(&ros_thread_id, NULL, &RosThread, NULL);
+    laser_scan_.header.stamp = ZERO_TIME();
+    localization_msg_.header.stamp = ZERO_TIME();
 
-  const int retval = a.exec();
-  run_ = false;
-  // Waiting for the created thread to terminate
-  pthread_join(ros_thread_id, NULL);
-  return retval;
+    server_ = new RobotWebSocket(10272);
+
+    // Setup timer to check for exit signal
+    QTimer exitTimer;
+    QObject::connect(&exitTimer, &QTimer::timeout, [&app]() {
+        if (!run_.load()) {
+            app.quit();
+        }
+    });
+    exitTimer.start(100);  // Check every 100ms
+
+    pthread_t ros_thread;
+    pthread_create(&ros_thread, NULL, &RosThread, NULL);
+
+    // Run Qt event loop
+    app.exec();
+
+    // Cleanup: ensure ROS thread stops
+    run_.store(false);
+
+    // Give ROS thread time to exit gracefully
+    usleep(100000);  // 100ms
+
+    // Wait for ROS thread to finish
+    pthread_join(ros_thread, NULL);
+
+    // Cleanup server
+    delete server_;
+    server_ = nullptr;
+
+    // Shutdown ROS
+    ROS_SHUTDOWN();
+
+    // Use _exit() to bypass global destructors that cause segfaults
+    // This is a known issue with ROS2 + Qt cleanup order
+    _exit(0);
 }
