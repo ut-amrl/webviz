@@ -124,6 +124,54 @@ PublisherPtr<Localization2DMsg> amrl_nav_goal_pub_;
 PublisherPtr<Empty> reset_nav_goals_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
+
+// Track current subscriptions for dynamic reconfiguration
+#ifdef ROS2
+SubscriberPtr<LaserScan> laser_sub_;
+SubscriberPtr<VisualizationMsg> vis_sub_;
+SubscriberPtr<Localization2DMsg> localization_sub_;
+#else
+SubscriberPtr<LaserScan> laser_sub_;
+SubscriberPtr<VisualizationMsg> vis_sub_;
+SubscriberPtr<Localization2DMsg> localization_sub_;
+#endif
+
+// Track current topic names to detect changes
+std::string current_laser_topic_;
+std::string current_viz_topic_;
+std::string current_loc_topic_;
+
+// Track current configuration for comprehensive monitoring
+struct CurrentConfig {
+    // Subscriber topics
+    std::string laser_topic;
+    std::string viz_topic;
+    std::string loc_topic;
+
+    // Publisher topics
+    std::string init_pose_std_topic;
+    std::string nav_goal_std_topic;
+    std::string init_pose_amrl_topic;
+    std::string nav_goal_amrl_topic;
+    std::string reset_goals_topic;
+
+    // Frames
+    std::string robot_frame;
+    std::string world_frame;
+
+    // WebSocket settings
+    int websocket_port;
+    double update_rate_hz;
+    double message_timeout_sec;
+
+    // Queue sizes
+    int laser_queue_size;
+    int viz_queue_size;
+    int loc_queue_size;
+    int pub_queue_size;
+};
+
+CurrentConfig current_config_;
 }  // namespace
 
 void LocalizationCallback(const Localization2DMsg &msg) {
@@ -279,17 +327,14 @@ void SetNavGoal(float x, float y, float theta, QString map) {
     PUBLISH(amrl_nav_goal_pub_, amrl_nav_goal_msg_);
 }
 
-void *RosThread(void *arg) {
-    // Don't detach - we need to join this thread for clean shutdown
-    CHECK_NOTNULL(server_);
-    QObject::connect(
-        server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
-    QObject::connect(
-        server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
-    QObject::connect(
-        server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
-
-    node_ = CREATE_NODE(CONFIG_ros_node_name);
+// Function to create or recreate ROS subscriptions
+void CreateSubscriptions() {
+    if (FLAGS_v > 0) {
+        printf("Creating ROS subscriptions:\n");
+        printf("  Laser: %s\n", CONFIG_laser_topic.c_str());
+        printf("  Visualization: %s\n", CONFIG_viz_topic.c_str());
+        printf("  Localization: %s\n", CONFIG_loc_topic.c_str());
+    }
 
 #ifdef ROS2
     // ROS2 callback setup with lambda wrappers
@@ -303,23 +348,219 @@ void *RosThread(void *arg) {
         LocalizationCallback(*msg);
     };
 
-    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
-    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
-    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
+    laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
+    vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
+    localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
 #else
-    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
-    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
-    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
+    laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
+    vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
+    localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
 #endif
+
+    // Update tracked topic names
+    current_laser_topic_ = CONFIG_laser_topic;
+    current_viz_topic_ = CONFIG_viz_topic;
+    current_loc_topic_ = CONFIG_loc_topic;
+}
+
+// Function to create or recreate ROS publishers
+void CreatePublishers() {
+    if (FLAGS_v > 0) {
+        printf("Creating ROS publishers:\n");
+        printf("  Initial pose (std): %s\n", CONFIG_init_pose_std_topic.c_str());
+        printf("  Nav goal (std): %s\n", CONFIG_nav_goal_std_topic.c_str());
+        printf("  Initial pose (AMRL): %s\n", CONFIG_init_pose_amrl_topic.c_str());
+        printf("  Nav goal (AMRL): %s\n", CONFIG_nav_goal_amrl_topic.c_str());
+        printf("  Reset goals: %s\n", CONFIG_reset_goals_topic.c_str());
+    }
 
     init_loc_pub_ = CREATE_PUBLISHER(node_, PoseWithCovarianceStamped, CONFIG_init_pose_std_topic, CONFIG_pub_queue_size);
     nav_goal_pub_ = CREATE_PUBLISHER(node_, PoseStamped, CONFIG_nav_goal_std_topic, CONFIG_pub_queue_size);
     amrl_init_loc_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_init_pose_amrl_topic, CONFIG_pub_queue_size);
     amrl_nav_goal_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_nav_goal_amrl_topic, CONFIG_pub_queue_size);
     reset_nav_goals_pub_ = CREATE_PUBLISHER(node_, Empty, CONFIG_reset_goals_topic, CONFIG_pub_queue_size);
+}
+
+// Function to capture current configuration state
+void CaptureCurrentConfig() {
+    current_config_.laser_topic = CONFIG_laser_topic;
+    current_config_.viz_topic = CONFIG_viz_topic;
+    current_config_.loc_topic = CONFIG_loc_topic;
+
+    current_config_.init_pose_std_topic = CONFIG_init_pose_std_topic;
+    current_config_.nav_goal_std_topic = CONFIG_nav_goal_std_topic;
+    current_config_.init_pose_amrl_topic = CONFIG_init_pose_amrl_topic;
+    current_config_.nav_goal_amrl_topic = CONFIG_nav_goal_amrl_topic;
+    current_config_.reset_goals_topic = CONFIG_reset_goals_topic;
+
+    current_config_.robot_frame = CONFIG_robot_frame;
+    current_config_.world_frame = CONFIG_world_frame;
+
+    current_config_.websocket_port = CONFIG_websocket_port;
+    current_config_.update_rate_hz = CONFIG_update_rate_hz;
+    current_config_.message_timeout_sec = CONFIG_message_timeout_sec;
+
+    current_config_.laser_queue_size = CONFIG_laser_queue_size;
+    current_config_.viz_queue_size = CONFIG_viz_queue_size;
+    current_config_.loc_queue_size = CONFIG_loc_queue_size;
+    current_config_.pub_queue_size = CONFIG_pub_queue_size;
+}
+
+// Comprehensive configuration monitoring and updating
+bool CheckAndUpdateConfiguration() {
+    bool subscribers_changed = false;
+    bool publishers_changed = false;
+    bool other_changed = false;
+
+    // Check subscriber topics
+    if (current_config_.laser_topic != CONFIG_laser_topic ||
+        current_config_.viz_topic != CONFIG_viz_topic ||
+        current_config_.loc_topic != CONFIG_loc_topic) {
+        subscribers_changed = true;
+    }
+
+    // Check publisher topics
+    if (current_config_.init_pose_std_topic != CONFIG_init_pose_std_topic ||
+        current_config_.nav_goal_std_topic != CONFIG_nav_goal_std_topic ||
+        current_config_.init_pose_amrl_topic != CONFIG_init_pose_amrl_topic ||
+        current_config_.nav_goal_amrl_topic != CONFIG_nav_goal_amrl_topic ||
+        current_config_.reset_goals_topic != CONFIG_reset_goals_topic) {
+        publishers_changed = true;
+    }
+
+    // Check other parameters (frames, rates, etc.)
+    if (current_config_.robot_frame != CONFIG_robot_frame ||
+        current_config_.world_frame != CONFIG_world_frame ||
+        current_config_.update_rate_hz != CONFIG_update_rate_hz ||
+        current_config_.message_timeout_sec != CONFIG_message_timeout_sec ||
+        current_config_.websocket_port != CONFIG_websocket_port) {
+        other_changed = true;
+    }
+
+    if (subscribers_changed || publishers_changed || other_changed) {
+        if (FLAGS_v > 0) {
+            printf("=== WebViz Configuration Change Detected ===\n");
+        }
+
+        // Handle subscriber changes
+        if (subscribers_changed) {
+            if (FLAGS_v > 0) {
+                printf("Updating ROS topic subscriptions:\n");
+                if (current_config_.laser_topic != CONFIG_laser_topic) {
+                    printf("  Laser scan topic: '%s' -> '%s'\n", current_config_.laser_topic.c_str(), CONFIG_laser_topic.c_str());
+                }
+                if (current_config_.viz_topic != CONFIG_viz_topic) {
+                    printf("  Visualization topic: '%s' -> '%s'\n", current_config_.viz_topic.c_str(), CONFIG_viz_topic.c_str());
+                }
+                if (current_config_.loc_topic != CONFIG_loc_topic) {
+                    printf("  Localization topic: '%s' -> '%s'\n", current_config_.loc_topic.c_str(), CONFIG_loc_topic.c_str());
+                }
+            }
+
+            // Reset and recreate subscriptions
+#ifdef ROS2
+            laser_sub_.reset();
+            vis_sub_.reset();
+            localization_sub_.reset();
+#else
+            laser_sub_.shutdown();
+            vis_sub_.shutdown();
+            localization_sub_.shutdown();
+#endif
+            CreateSubscriptions();
+        }
+
+        // Handle publisher changes
+        if (publishers_changed) {
+            if (FLAGS_v > 0) {
+                printf("Updating ROS topic publishers:\n");
+                if (current_config_.init_pose_std_topic != CONFIG_init_pose_std_topic) {
+                    printf("  Initial pose (std): '%s' -> '%s'\n", current_config_.init_pose_std_topic.c_str(), CONFIG_init_pose_std_topic.c_str());
+                }
+                if (current_config_.nav_goal_std_topic != CONFIG_nav_goal_std_topic) {
+                    printf("  Nav goal (std): '%s' -> '%s'\n", current_config_.nav_goal_std_topic.c_str(), CONFIG_nav_goal_std_topic.c_str());
+                }
+                if (current_config_.init_pose_amrl_topic != CONFIG_init_pose_amrl_topic) {
+                    printf("  Initial pose (AMRL): '%s' -> '%s'\n", current_config_.init_pose_amrl_topic.c_str(), CONFIG_init_pose_amrl_topic.c_str());
+                }
+                if (current_config_.nav_goal_amrl_topic != CONFIG_nav_goal_amrl_topic) {
+                    printf("  Nav goal (AMRL): '%s' -> '%s'\n", current_config_.nav_goal_amrl_topic.c_str(), CONFIG_nav_goal_amrl_topic.c_str());
+                }
+                if (current_config_.reset_goals_topic != CONFIG_reset_goals_topic) {
+                    printf("  Reset goals: '%s' -> '%s'\n", current_config_.reset_goals_topic.c_str(), CONFIG_reset_goals_topic.c_str());
+                }
+            }
+
+            // Reset and recreate publishers (ROS handles cleanup automatically)
+            CreatePublishers();
+        }
+
+        // Handle other parameter changes
+        if (other_changed) {
+            if (FLAGS_v > 0) {
+                printf("Other configuration updates:\n");
+                if (current_config_.robot_frame != CONFIG_robot_frame) {
+                    printf("  Robot frame: '%s' -> '%s'\n", current_config_.robot_frame.c_str(), CONFIG_robot_frame.c_str());
+                }
+                if (current_config_.world_frame != CONFIG_world_frame) {
+                    printf("  World frame: '%s' -> '%s'\n", current_config_.world_frame.c_str(), CONFIG_world_frame.c_str());
+                }
+                if (current_config_.update_rate_hz != CONFIG_update_rate_hz) {
+                    printf("  Update rate: %.1f Hz -> %.1f Hz\n", current_config_.update_rate_hz, CONFIG_update_rate_hz);
+                }
+                if (current_config_.message_timeout_sec != CONFIG_message_timeout_sec) {
+                    printf("  Message timeout: %.1f s -> %.1f s\n", current_config_.message_timeout_sec, CONFIG_message_timeout_sec);
+                }
+                if (current_config_.websocket_port != CONFIG_websocket_port) {
+                    printf("  WebSocket port: %d -> %d (requires restart)\n", current_config_.websocket_port, CONFIG_websocket_port);
+                }
+            }
+        }
+
+        // Update our tracking of current config
+        CaptureCurrentConfig();
+
+        if (FLAGS_v > 0) {
+            printf("Configuration update completed successfully!\n");
+            printf("==========================================\n");
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+void *RosThread(void *arg) {
+    // Don't detach - we need to join this thread for clean shutdown
+    CHECK_NOTNULL(server_);
+    QObject::connect(
+        server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
+    QObject::connect(
+        server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
+    QObject::connect(
+        server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
+
+    node_ = CREATE_NODE(CONFIG_ros_node_name);
+
+    // Create initial subscriptions and publishers
+    CreateSubscriptions();
+    CreatePublishers();
+
+    // Capture initial configuration state for monitoring
+    CaptureCurrentConfig();
 
     RateLoop loop(CONFIG_update_rate_hz);
+    int config_check_counter = 0;
+    const int config_check_interval = 10;  // Check config every 10 loops (~1 second at 10Hz)
+
     while (ROS_OK() && run_.load()) {
+        // Periodically check for configuration changes
+        if (++config_check_counter >= config_check_interval) {
+            CheckAndUpdateConfiguration();
+            config_check_counter = 0;
+        }
+
         SendUpdate();
         ROS_SPIN_ONCE(node_);
         loop.Sleep();

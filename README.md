@@ -88,6 +88,66 @@ frames = {
 
 See `config/webviz_config.lua` for complete configuration options.
 
+## Integration with Launch Files
+
+WebViz can be easily integrated into larger ROS stacks using launch files.
+
+### ROS1 Launch File Example
+
+```xml
+<launch>
+  <!-- Your existing robot nodes -->
+  <include file="$(find your_robot)/launch/robot.launch" />
+  
+  <!-- WebViz visualization -->
+  <node name="webviz" pkg="webviz" type="websocket" output="screen">
+    <param name="config_file" value="$(find webviz)/config/webviz_config.lua" />
+    <param name="v" value="1" />  <!-- Verbose logging -->
+  </node>
+</launch>
+```
+
+### ROS2 Launch File Example (Python)
+
+```python
+from launch import LaunchDescription
+from launch.actions import IncludeLaunchDescription
+from launch_ros.actions import Node
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from ament_index_python.packages import get_package_share_directory
+import os
+
+def generate_launch_description():
+    # Path to webviz config
+    webviz_config = os.path.join(
+        get_package_share_directory('webviz'),
+        'config',
+        'webviz_config.lua'
+    )
+    
+    return LaunchDescription([
+        # Your existing robot launch
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource([
+                get_package_share_directory('your_robot'), 
+                '/launch/robot.launch.py'
+            ])
+        ),
+        
+        # WebViz node
+        Node(
+            package='webviz',
+            executable='websocket',
+            name='webviz',
+            output='screen',
+            parameters=[{
+                'config_file': webviz_config,
+                'v': 1  # Verbose logging
+            }]
+        )
+    ])
+```
+
 ## Usage
 
 1. **Start the server**: `./bin/websocket`
