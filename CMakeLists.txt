@@ -43,6 +43,8 @@ if(${ROS_VERSION} EQUAL "1")
   SET(ROS_BUILD_SHARED_LIBS false)
 
   find_package(Qt5 COMPONENTS Core Widgets WebSockets REQUIRED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LUA REQUIRED lua5.1)
   set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
   MESSAGE(STATUS "ROS-Overrride Build Type: ${CMAKE_BUILD_TYPE}")
@@ -59,6 +61,7 @@ if(${ROS_VERSION} EQUAL "1")
 
   ADD_SUBDIRECTORY(src/shared)
   INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/shared)
+  INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/config_reader/include)
 
   SET(libs roslib roscpp glog gflags amrl_shared_lib
       ${BUILD_SPECIFIC_LIBRARIES})
@@ -71,7 +74,8 @@ if(${ROS_VERSION} EQUAL "1")
       Qt5::Core
       Qt5::Widgets
       Qt5::WebSockets
-      ${libs} ${OPENGL_LIBRARY})
+      ${libs} ${OPENGL_LIBRARY} ${LUA_LIBRARIES})
+  TARGET_INCLUDE_DIRECTORIES(websocket PRIVATE ${LUA_INCLUDE_DIRS})
 
 elseif(${ROS_VERSION} EQUAL "2")
   MESSAGE(STATUS "Compiling with ROS2 COLCON")
@@ -106,6 +110,8 @@ elseif(${ROS_VERSION} EQUAL "2")
   
   # Qt5 for ROS2
   find_package(Qt5 COMPONENTS Core Widgets WebSockets REQUIRED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LUA REQUIRED lua5.1)
   set(CMAKE_INCLUDE_CURRENT_DIR ON)
   
   SET(CMAKE_CXX_FLAGS "-std=c++14 -march=native -Werror -Wall -g")
@@ -127,6 +133,7 @@ elseif(${ROS_VERSION} EQUAL "2")
 
   ADD_SUBDIRECTORY(src/shared)
   INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/shared)
+  INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/config_reader/include)
 
   # ROS2 executable
   add_executable(websocket
@@ -151,7 +158,10 @@ elseif(${ROS_VERSION} EQUAL "2")
       amrl_shared_lib
       glog
       gflags
+      ${LUA_LIBRARIES}
   )
+  
+  target_include_directories(websocket PRIVATE ${LUA_INCLUDE_DIRS})
 
   # --- Add install steps ---
   install(TARGETS websocket
@@ -160,6 +170,10 @@ elseif(${ROS_VERSION} EQUAL "2")
   
   install(FILES webviz.html
     DESTINATION share/${PROJECT_NAME}
+  )
+  
+  install(FILES config/webviz_config.lua
+    DESTINATION share/${PROJECT_NAME}/config
   )
 
   # Export runtime dependencies

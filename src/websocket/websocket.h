@@ -69,7 +69,7 @@ class QWebSocketServer;
 class QWebSocket;
 
 struct MessageHeader {
-    MessageHeader() : nonce(42) {}
+    MessageHeader();                      // Move implementation to .cc file
     uint32_t nonce;                       // 1
     uint32_t num_points;                  // 2
     uint32_t num_lines;                   // 3

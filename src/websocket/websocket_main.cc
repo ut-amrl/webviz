@@ -60,6 +60,7 @@ using std_msgs::Empty;
 #include "glog/logging.h"
 #include "math/math_util.h"
 #include "util/timer.h"
+#include "config_reader/config_reader.h"
 #include "websocket.h"
 #include "ros_compat.h"
 
@@ -67,7 +68,43 @@ using std::vector;
 
 DEFINE_double(fps, 10.0, "Max visualization frames rate.");
 DEFINE_double(max_age, 2.0, "Maximum age of a message before it gets dropped.");
+DEFINE_string(config_file, "config/webviz_config.lua", "Name of config file to use");
 DECLARE_int32(v);
+
+// Configuration variables using config-reader macros
+CONFIG_INT(websocket_port, "websocket.port");
+CONFIG_DOUBLE(update_rate_hz, "websocket.update_rate_hz");
+CONFIG_DOUBLE(message_timeout_sec, "websocket.message_timeout_sec");
+CONFIG_INT(exit_check_interval_ms, "websocket.exit_check_interval_ms");
+
+CONFIG_STRING(ros_node_name, "ros_node.name");
+CONFIG_INT(laser_queue_size, "ros_node.queue_sizes.laser_scan");
+CONFIG_INT(viz_queue_size, "ros_node.queue_sizes.visualization");
+CONFIG_INT(loc_queue_size, "ros_node.queue_sizes.localization");
+CONFIG_INT(pub_queue_size, "ros_node.queue_sizes.publishers");
+
+CONFIG_STRING(laser_topic, "ros_topics.laser_scan");
+CONFIG_STRING(viz_topic, "ros_topics.visualization");
+CONFIG_STRING(loc_topic, "ros_topics.localization");
+CONFIG_STRING(init_pose_std_topic, "ros_topics.initial_pose_std");
+CONFIG_STRING(nav_goal_std_topic, "ros_topics.nav_goal_std");
+CONFIG_STRING(init_pose_amrl_topic, "ros_topics.initial_pose_amrl");
+CONFIG_STRING(nav_goal_amrl_topic, "ros_topics.nav_goal_amrl");
+CONFIG_STRING(reset_goals_topic, "ros_topics.reset_nav_goals");
+
+CONFIG_STRING(robot_frame, "frames.robot_frame");
+CONFIG_STRING(world_frame, "frames.world_frame");
+
+CONFIG_DOUBLE(laser_range_scale, "data_processing.laser_range_scale");
+CONFIG_INT(protocol_nonce, "data_processing.protocol_nonce");
+CONFIG_INT(text_buffer_size, "data_processing.text_buffer_size");
+CONFIG_INT(map_name_buffer_size, "data_processing.map_name_buffer_size");
+
+CONFIG_INT(verbosity, "logging.verbosity");
+
+CONFIG_BOOL(enable_message_aging, "performance.enable_message_aging");
+CONFIG_BOOL(enable_rate_limiting, "performance.enable_rate_limiting");
+CONFIG_INT(thread_sleep_usec, "performance.thread_sleep_usec");
 
 namespace {
 std::atomic<bool> run_(true);
@@ -100,8 +137,8 @@ void LaserCallback(const LaserScan &msg) {
 
 void VisualizationCallback(const VisualizationMsg &msg) {
     static bool warning_showed_ = false;
-    if (msg.header.frame_id != "base_link" &&
-        msg.header.frame_id != "map") {
+    if (msg.header.frame_id != CONFIG_robot_frame &&
+        msg.header.frame_id != CONFIG_world_frame) {
         if (!warning_showed_) {
             fprintf(stderr,
                     "WARNING: Ignoring visualization for unknown frame '%s'."
@@ -142,25 +179,26 @@ void MergeMessage(const VisualizationMsg &m1,
 
 void DropOldMessages() {
     const auto now = GET_TIME();
+    const double max_age = CONFIG_message_timeout_sec;
 #ifdef ROS2
-    if ((now - rclcpp::Time(laser_scan_.header.stamp)).seconds() > FLAGS_max_age) {
+    if ((now - rclcpp::Time(laser_scan_.header.stamp)).seconds() > max_age) {
         laser_scan_.header.stamp = ZERO_TIME();
     }
     std::remove_if(
         vis_msgs_.begin(),
         vis_msgs_.end(),
-        [&now](const VisualizationMsg &m) {
-            return ((now - rclcpp::Time(m.header.stamp)).seconds() > FLAGS_max_age);
+        [&now, max_age](const VisualizationMsg &m) {
+            return ((now - rclcpp::Time(m.header.stamp)).seconds() > max_age);
         });
 #else
-    if ((now - laser_scan_.header.stamp).toSec() > FLAGS_max_age) {
+    if ((now - laser_scan_.header.stamp).toSec() > max_age) {
         laser_scan_.header.stamp = ZERO_TIME();
     }
     std::remove_if(
         vis_msgs_.begin(),
         vis_msgs_.end(),
-        [&now](const VisualizationMsg &m) {
-            return ((now - m.header.stamp).toSec() > FLAGS_max_age);
+        [&now, max_age](const VisualizationMsg &m) {
+            return ((now - m.header.stamp).toSec() > max_age);
         });
 #endif
 }
@@ -184,7 +222,7 @@ void SendUpdate() {
     VisualizationMsg global_msgs;
     for (const VisualizationMsg &m : vis_msgs_) {
         // std::cout << m << std::endl;
-        if (m.header.frame_id == "map") {
+        if (m.header.frame_id == CONFIG_world_frame) {
             MergeMessage(m, &global_msgs);
         } else {
             MergeMessage(m, &local_msgs);
@@ -251,7 +289,7 @@ void *RosThread(void *arg) {
     QObject::connect(
         server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
 
-    node_ = CREATE_NODE("websocket");
+    node_ = CREATE_NODE(CONFIG_ros_node_name);
 
 #ifdef ROS2
     // ROS2 callback setup with lambda wrappers
@@ -265,22 +303,22 @@ void *RosThread(void *arg) {
         LocalizationCallback(*msg);
     };
 
-    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, "/scan", 5, laser_callback);
-    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, "/visualization", 10, vis_callback);
-    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, "/localization", 10, loc_callback);
+    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
+    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
+    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
 #else
-    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, "/scan", 5, &LaserCallback);
-    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, "/visualization", 10, &VisualizationCallback);
-    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, "/localization", 10, &LocalizationCallback);
+    auto laser_sub = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
+    auto vis_sub = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
+    auto localization_sub = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
 #endif
 
-    init_loc_pub_ = CREATE_PUBLISHER(node_, PoseWithCovarianceStamped, "/initialpose", 10);
-    nav_goal_pub_ = CREATE_PUBLISHER(node_, PoseStamped, "/move_base_simple/goal", 10);
-    amrl_init_loc_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, "/set_pose", 10);
-    amrl_nav_goal_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, "/set_nav_target", 10);
-    reset_nav_goals_pub_ = CREATE_PUBLISHER(node_, Empty, "/reset_nav_goals", 10);
+    init_loc_pub_ = CREATE_PUBLISHER(node_, PoseWithCovarianceStamped, CONFIG_init_pose_std_topic, CONFIG_pub_queue_size);
+    nav_goal_pub_ = CREATE_PUBLISHER(node_, PoseStamped, CONFIG_nav_goal_std_topic, CONFIG_pub_queue_size);
+    amrl_init_loc_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_init_pose_amrl_topic, CONFIG_pub_queue_size);
+    amrl_nav_goal_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_nav_goal_amrl_topic, CONFIG_pub_queue_size);
+    reset_nav_goals_pub_ = CREATE_PUBLISHER(node_, Empty, CONFIG_reset_goals_topic, CONFIG_pub_queue_size);
 
-    RateLoop loop(FLAGS_fps);
+    RateLoop loop(CONFIG_update_rate_hz);
     while (ROS_OK() && run_.load()) {
         SendUpdate();
         ROS_SPIN_ONCE(node_);
@@ -301,17 +339,21 @@ void SignalHandler(int) {
 int main(int argc, char *argv[]) {
     google::ParseCommandLineFlags(&argc, &argv, false);
     google::InitGoogleLogging(argv[0]);
+
+    // Initialize the configuration system with config-reader
+    config_reader::ConfigReader config_reader({FLAGS_config_file});
+
     // Initialize Qt application.
     QCoreApplication app(argc, argv);
     // Initialize ROS.
-    ROS_INIT(argc, argv, "websocket");
+    ROS_INIT(argc, argv, CONFIG_ros_node_name);
     signal(SIGINT, SignalHandler);
     signal(SIGALRM, SignalHandler);
 
     laser_scan_.header.stamp = ZERO_TIME();
     localization_msg_.header.stamp = ZERO_TIME();
 
-    server_ = new RobotWebSocket(10272);
+    server_ = new RobotWebSocket(CONFIG_websocket_port);
 
     // Setup timer to check for exit signal
     QTimer exitTimer;
@@ -320,7 +362,7 @@ int main(int argc, char *argv[]) {
             app.quit();
         }
     });
-    exitTimer.start(100);  // Check every 100ms
+    exitTimer.start(CONFIG_exit_check_interval_ms);  // Check based on config
 
     pthread_t ros_thread;
     pthread_create(&ros_thread, NULL, &RosThread, NULL);
@@ -332,7 +374,7 @@ int main(int argc, char *argv[]) {
     run_.store(false);
 
     // Give ROS thread time to exit gracefully
-    usleep(100000);  // 100ms
+    usleep(CONFIG_thread_sleep_usec);
 
     // Wait for ROS thread to finish
     pthread_join(ros_thread, NULL);

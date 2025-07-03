@@ -6,43 +6,99 @@ jobs:
   # Set the job key. The key is displayed as the job name
   # when a job name is not provided
   build-test:
-    # Name the Job
-    name: Build test
-    # Set the type of machine to run on
-    runs-on: ubuntu-20.04
+    name: Build Test (${{ matrix.ros_distro }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ROS1 Noetic on x64
+          - ros_distro: noetic
+            arch: amd64
+            runner: ubuntu-20.04
+            container: ros:noetic
+            
+          # ROS1 Noetic on ARM64 (Jetson simulation)
+          - ros_distro: noetic
+            arch: arm64
+            runner: ubuntu-20.04
+            container: arm64v8/ros:noetic
+            
+          # ROS2 Humble on x64  
+          - ros_distro: humble
+            arch: amd64
+            runner: ubuntu-22.04
+            container: ros:humble
+            
+          # ROS2 Humble on ARM64 (Jetson simulation)
+          - ros_distro: humble
+            arch: arm64
+            runner: ubuntu-22.04
+            container: arm64v8/ros:humble
+
+    container: ${{ matrix.container }}
+    
     defaults:
       run:
         shell: bash -l {0}
-    container: ros:noetic
 
     steps:
+      # Handle multi-arch setup for ARM64
+      - name: Set up QEMU for ARM64 emulation
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm64
+
       # Run package update
       - name: Run package update
         run: |
-          sudo apt update
-          sudo apt dist-upgrade -y
+          apt update
+          apt dist-upgrade -y
 
-      # Install dependencies
-      - name: Install dependencies
+      # Install dependencies (ROS1 Noetic)
+      - name: Install dependencies (ROS1 Noetic)
+        if: matrix.ros_distro == 'noetic'
         run: |
-          sudo apt-get install -y git qt5-default libqt5websockets5-dev ros-noetic-angles ros-noetic-tf python-is-python3 libgtest-dev libgoogle-glog-dev cmake build-essential
+          apt-get install -y git qt5-default libqt5websockets5-dev \
+            ros-noetic-angles ros-noetic-tf python-is-python3 \
+            libgtest-dev libgoogle-glog-dev cmake build-essential \
+            libgflags-dev libyaml-cpp-dev
+          
+      # Install dependencies (ROS2 Humble)
+      - name: Install dependencies (ROS2 Humble)
+        if: matrix.ros_distro == 'humble'
+        run: |
+          apt-get install -y git qtbase5-dev libqt5websockets5-dev \
+            ros-humble-angles ros-humble-tf2 python3 \
+            libgtest-dev libgoogle-glog-dev cmake build-essential \
+            libgflags-dev libyaml-cpp-dev colcon-common-extensions
 
-      # Rosdep
-      - name: ROSDep Update
+      # ROSDep (ROS1)
+      - name: ROSDep Update (ROS1)
+        if: matrix.ros_distro == 'noetic'
         run: |
-          sudo apt install python3-rosdep python3-rosinstall python3-rosinstall-generator python3-wstool build-essential
-          sudo rosdep init
+          apt install -y python3-rosdep python3-rosinstall python3-rosinstall-generator python3-wstool build-essential
+          rosdep init || true
           rosdep update
 
-      # Checks out a copy of your repository
+      # ROSDep (ROS2)  
+      - name: ROSDep Update (ROS2)
+        if: matrix.ros_distro == 'humble'
+        run: |
+          apt install -y python3-rosdep
+          rosdep init || true
+          rosdep update
+
+      # Checkout code
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           submodules: 'recursive'
 
-
-      # Checkout and build amrl_msgs
-      - name: Get amrl_msgs
+      # Get amrl_msgs (ROS1)
+      - name: Get amrl_msgs (ROS1)
+        if: matrix.ros_distro == 'noetic'
         run: |
           source /opt/ros/noetic/setup.bash
           export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/../amrl_msgs
@@ -51,10 +107,44 @@ jobs:
           cd amrl_msgs
           make
 
-      # Compiles the code
-      - name: Run build
+      # Get and build amrl_msgs (ROS2)
+      - name: Get amrl_msgs (ROS2)
+        if: matrix.ros_distro == 'humble'
+        run: |
+          source /opt/ros/humble/setup.bash
+          cd $GITHUB_WORKSPACE/..
+          git clone https://github.com/ut-amrl/amrl_msgs.git
+          cd amrl_msgs
+          colcon build
+          source install/setup.bash
+
+      # Build webviz (ROS1)
+      - name: Build webviz (ROS1)
+        if: matrix.ros_distro == 'noetic'
         run: |
           source /opt/ros/noetic/setup.bash
-          export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/../amrl_msgs:$GITHUB_WORKSPACE/../amrl_maps
+          export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/../amrl_msgs
           cd $GITHUB_WORKSPACE
           make
+
+      # Build webviz (ROS2)
+      - name: Build webviz (ROS2)
+        if: matrix.ros_distro == 'humble'
+        run: |
+          source /opt/ros/humble/setup.bash
+          source $GITHUB_WORKSPACE/../amrl_msgs/install/setup.bash
+          cd $GITHUB_WORKSPACE
+          make
+
+      # Test binary execution
+      - name: Test binary execution
+        run: |
+          cd $GITHUB_WORKSPACE
+          timeout 5s ./bin/websocket --help || [ $? -eq 124 ] # Timeout expected for help
+          
+      # Architecture-specific validation
+      - name: Validate architecture build
+        run: |
+          cd $GITHUB_WORKSPACE
+          file ./bin/websocket
+          ldd ./bin/websocket || true

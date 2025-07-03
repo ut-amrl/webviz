@@ -30,6 +30,7 @@
 
 #include "glog/logging.h"
 #include "gflags/gflags.h"
+#include "config_reader/config_reader.h"
 
 #include <QtWebSockets/qwebsocketserver.h>
 #include <QtWebSockets/qwebsocket.h>
@@ -78,6 +79,16 @@ using sensor_msgs::LaserScan;
 using std::vector;
 
 DECLARE_int32(v);
+
+// Configuration variables used in websocket.cc
+CONFIG_INT(protocol_nonce, "data_processing.protocol_nonce");
+CONFIG_DOUBLE(laser_range_scale, "data_processing.laser_range_scale");
+CONFIG_INT(map_name_buffer_size, "data_processing.map_name_buffer_size");
+CONFIG_INT(text_buffer_size, "data_processing.text_buffer_size");
+
+MessageHeader::MessageHeader() {
+    nonce = CONFIG_protocol_nonce;
+}
 
 RobotWebSocket::RobotWebSocket(uint16_t port) : ws_server_(new QWebSocketServer(QStringLiteral("WebViz"),
                                                                                 QWebSocketServer::NonSecureMode)),
@@ -243,7 +254,7 @@ DataMessage DataMessage::FromRosMessages(
     msg.header.loc_r = localization_msg.pose.theta;
     strncpy(msg.header.map,
             localization_msg.map.data(),
-            std::min(sizeof(msg.header.map) - 1, localization_msg.map.size()));
+            std::min(CONFIG_map_name_buffer_size - 1, static_cast<int>(localization_msg.map.size())));
     msg.header.laser_min_angle = laser_msg.angle_min;
     msg.header.laser_max_angle = laser_msg.angle_max;
     msg.header.num_laser_rays = laser_msg.ranges.size();
@@ -253,7 +264,7 @@ DataMessage DataMessage::FromRosMessages(
             laser_msg.ranges[i] >= laser_msg.range_max) {
             msg.laser_scan[i] = 0;
         } else {
-            msg.laser_scan[i] = static_cast<uint32_t>(laser_msg.ranges[i] * 1000.0);
+            msg.laser_scan[i] = static_cast<uint32_t>(laser_msg.ranges[i] * CONFIG_laser_range_scale);
         }
     }
     msg.points = local_msg.points;
@@ -284,7 +295,7 @@ DataMessage DataMessage::FromRosMessages(
         localText.start = text.start;
         localText.color = text.color;
         localText.size_em = text.size_em;
-        size_t size = std::min(sizeof(localText.text) - 1, text.text.size());
+        size_t size = std::min(CONFIG_text_buffer_size - 1, static_cast<int>(text.text.size()));
         strncpy(localText.text, text.text.data(), size);
         localText.text[size] = 0;
         msg.text_annotations.push_back(localText);
@@ -294,7 +305,7 @@ DataMessage DataMessage::FromRosMessages(
         localText.start = text.start;
         localText.color = text.color;
         localText.size_em = text.size_em;
-        size_t size = std::min(sizeof(localText.text) - 1, text.text.size());
+        size_t size = std::min(CONFIG_text_buffer_size - 1, static_cast<int>(text.text.size()));
         strncpy(localText.text, text.text.data(), size);
         localText.text[size] = 0;
         msg.text_annotations.push_back(localText);
