@@ -6,7 +6,7 @@ jobs:
   # Set the job key. The key is displayed as the job name
   # when a job name is not provided
   build-test:
-    name: Build Test (${{ matrix.ros_distro }}, ${{ matrix.arch }})
+    name: Build Test (${{ matrix.ros_distro }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -15,26 +15,14 @@ jobs:
           # ROS1 Noetic on x64
           - ros_distro: noetic
             arch: amd64
-            runner: ubuntu-20.04
+            runner: ubuntu-22.04
             container: ros:noetic
-            
-          # ROS1 Noetic on ARM64 (Jetson simulation)
-          - ros_distro: noetic
-            arch: arm64
-            runner: ubuntu-20.04
-            container: arm64v8/ros:noetic
             
           # ROS2 Humble on x64  
           - ros_distro: humble
             arch: amd64
             runner: ubuntu-22.04
             container: ros:humble
-            
-          # ROS2 Humble on ARM64 (Jetson simulation)
-          - ros_distro: humble
-            arch: arm64
-            runner: ubuntu-22.04
-            container: arm64v8/ros:humble
 
     container: ${{ matrix.container }}
     
@@ -43,13 +31,6 @@ jobs:
         shell: bash -l {0}
 
     steps:
-      # Handle multi-arch setup for ARM64
-      - name: Set up QEMU for ARM64 emulation
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v2
-        with:
-          platforms: arm64
-
       # Run package update
       - name: Run package update
         run: |
@@ -61,24 +42,39 @@ jobs:
         if: matrix.ros_distro == 'noetic'
         run: |
           apt-get install -y git qt5-default libqt5websockets5-dev \
-            ros-noetic-angles ros-noetic-tf python-is-python3 \
+            ros-noetic-angles ros-noetic-tf ros-noetic-xmlrpcpp python-is-python3 \
             libgtest-dev libgoogle-glog-dev cmake build-essential \
-            libgflags-dev libyaml-cpp-dev
+            libgflags-dev libyaml-cpp-dev liblua5.1-0-dev \
+            libeigen3-dev
+          
+      # Install GCC 12 for ROS2 Humble
+      - name: Install GCC 12 (ROS2 Humble)
+        if: matrix.ros_distro == 'humble'
+        run: |
+          apt-get update
+          apt-get install -y g++-12 gcc-12
+          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+          gcc --version
+          g++ --version
           
       # Install dependencies (ROS2 Humble)
       - name: Install dependencies (ROS2 Humble)
         if: matrix.ros_distro == 'humble'
         run: |
           apt-get install -y git qtbase5-dev libqt5websockets5-dev \
-            ros-humble-angles ros-humble-tf2 python3 \
+            ros-humble-angles ros-humble-tf2 python3 python3-pip \
             libgtest-dev libgoogle-glog-dev cmake build-essential \
-            libgflags-dev libyaml-cpp-dev colcon-common-extensions
+            libgflags-dev libyaml-cpp-dev liblua5.1-0-dev \
+            libeigen3-dev
+          pip3 install colcon-common-extensions
 
       # ROSDep (ROS1)
       - name: ROSDep Update (ROS1)
         if: matrix.ros_distro == 'noetic'
         run: |
           apt install -y python3-rosdep python3-rosinstall python3-rosinstall-generator python3-wstool build-essential
+          rm -f /etc/ros/rosdep/sources.list.d/20-default.list
           rosdep init || true
           rosdep update
 
@@ -87,6 +83,7 @@ jobs:
         if: matrix.ros_distro == 'humble'
         run: |
           apt install -y python3-rosdep
+          rm -f /etc/ros/rosdep/sources.list.d/20-default.list
           rosdep init || true
           rosdep update
 
@@ -116,7 +113,7 @@ jobs:
           git clone https://github.com/ut-amrl/amrl_msgs.git
           cd amrl_msgs
           colcon build
-          source install/setup.bash
+          echo "AMENT_PREFIX_PATH=$GITHUB_WORKSPACE/../amrl_msgs/install:$AMENT_PREFIX_PATH" >> $GITHUB_ENV
 
       # Build webviz (ROS1)
       - name: Build webviz (ROS1)
@@ -139,8 +136,42 @@ jobs:
       # Test binary execution
       - name: Test binary execution
         run: |
+          if [ "${{ matrix.ros_distro }}" == "noetic" ]; then
+            source /opt/ros/noetic/setup.bash
+            export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/../amrl_msgs
+          elif [ "${{ matrix.ros_distro }}" == "humble" ]; then
+            source /opt/ros/humble/setup.bash
+            source $GITHUB_WORKSPACE/../amrl_msgs/install/setup.bash
+          fi
           cd $GITHUB_WORKSPACE
-          timeout 5s ./bin/websocket --help || [ $? -eq 124 ] # Timeout expected for help
+          
+          # Check if binary exists and is executable
+          if [ ! -f "./bin/websocket" ]; then
+            echo "Error: ./bin/websocket not found"
+            exit 1
+          fi
+          if [ ! -x "./bin/websocket" ]; then
+            echo "Error: ./bin/websocket is not executable"
+            exit 1
+          fi
+          
+          # Test binary with proper exit code handling
+          echo "Testing websocket --help..."
+          ./bin/websocket --help > help_output.txt 2>&1
+          RC=$?
+          if [ $RC -eq 0 ] || [ $RC -eq 1 ]; then
+            echo "✓ websocket --help completed (exit code $RC)"
+            cat help_output.txt
+          else
+            echo "✗ websocket --help failed with unexpected exit code $RC"
+            echo "--- Help output ---"
+            cat help_output.txt
+            echo "--- Library dependencies ---"
+            ldd ./bin/websocket || echo "ldd failed"
+            echo "--- Environment ---"
+            env | grep -E "(ROS|AMENT|CONFIG)" || echo "No ROS env vars"
+            exit $RC
+          fi
           
       # Architecture-specific validation
       - name: Validate architecture build

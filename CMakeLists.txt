@@ -114,7 +114,7 @@ elseif(${ROS_VERSION} EQUAL "2")
   pkg_check_modules(LUA REQUIRED lua5.1)
   set(CMAKE_INCLUDE_CURRENT_DIR ON)
   
-  SET(CMAKE_CXX_FLAGS "-std=c++14 -march=native -Werror -Wall -g")
+  SET(CMAKE_CXX_FLAGS "-std=c++17 -march=native -Werror -Wall -g")
   
   IF(${CMAKE_BUILD_TYPE} MATCHES "Release")
     MESSAGE(STATUS "Additional Flags for Release mode")

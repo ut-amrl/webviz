@@ -337,7 +337,16 @@ void SignalHandler(int) {
 }
 
 int main(int argc, char *argv[]) {
-    google::ParseCommandLineFlags(&argc, &argv, false);
+    // Set usage message for gflags help
+    google::SetUsageMessage(
+        "WebViz WebSocket Server - Real-time robot visualization bridge\n"
+        "Usage: " +
+        std::string(argv[0]) +
+        " [options]\n"
+        "For more information, see README.md");
+
+    // Parse command line flags - gflags will handle --help/--helpshort automatically and exit
+    google::ParseCommandLineFlags(&argc, &argv, true);
     google::InitGoogleLogging(argv[0]);
 
     // Initialize the configuration system with config-reader
