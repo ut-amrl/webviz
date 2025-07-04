@@ -25,8 +25,8 @@ WebViz provides real-time streaming of robot sensor data, localization, and cust
     ```bash
     # Ubuntu/Debian
     sudo apt install build-essential cmake qt5-default libqt5websockets5-dev \
-                     qtbase5-dev qtwebengine5-dev libgoogle-glog-dev libgflags-dev \
-                     colcon-common-extensions libgtest-dev liblua5.1-0-dev
+                     python3-colcon-common-extensions libgtest-dev liblua5.1-0-dev \
+                     libgoogle-glog-dev libgflags-dev
     ```
 
 ## Setup
