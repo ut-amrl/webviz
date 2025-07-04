@@ -29,7 +29,7 @@ WebViz provides real-time streaming of robot sensor data, localization, and cust
                      colcon-common-extensions libgtest-dev liblua5.1-0-dev
     ```
 
-## Usage
+## Setup
 
 1. Clone this repository and initialize submodules:
     ```bash
@@ -52,9 +52,9 @@ WebViz provides real-time streaming of robot sensor data, localization, and cust
 
 4. Run `make`. This will automatically build and install (for ROS2) or just build (for ROS1). No need to run `catkin_*`, `rosbuild`, etc.
 
-## Running WebViz
+## Usage
 
-### Start the WebSocket Server
+1. **Start the server**:
 ```bash
 # Start the server with default configuration
 ./bin/websocket
@@ -65,34 +65,16 @@ WebViz provides real-time streaming of robot sensor data, localization, and cust
 # Override other parameters with gflags
 ./bin/websocket --fps=20 --max_age=5.0 --v=1
 ```
-
-**Configuration structure:**
-```lua
-websocket = {
-  port = 10272;                    -- WebSocket server port
-  update_rate_hz = 10.0;           -- Update frequency
-  message_timeout_sec = 2.0;       -- Message timeout
-};
-
-ros_topics = {
-  laser_scan = "/scan";            -- LiDAR topic
-  visualization = "/visualization"; -- Custom geometry
-  localization = "/localization";  -- Robot pose
-};
-
-frames = {
-  robot_frame = "base_link";       -- Robot frame
-  world_frame = "map";             -- World frame
-};
-```
+2. **Open browser**: Load `webviz.html` 
+3. **Connect**: Enter robot IP and click Connect
 
 See `config/webviz_config.lua` for complete configuration options.
 
-## Integration with Launch Files
+### Integration with Launch Files
 
 WebViz can be easily integrated into larger ROS stacks using launch files.
 
-### ROS1 Launch File Example
+#### ROS1 Launch File Example
 
 ```xml
 <launch>
@@ -107,7 +89,7 @@ WebViz can be easily integrated into larger ROS stacks using launch files.
 </launch>
 ```
 
-### ROS2 Launch File Example (Python)
+#### ROS2 Launch File Example (Python)
 
 ```python
 from launch import LaunchDescription
@@ -147,12 +129,6 @@ def generate_launch_description():
         )
     ])
 ```
-
-## Usage
-
-1. **Start the server**: `./bin/websocket`
-2. **Open browser**: Load `webviz.html` 
-3. **Connect**: Enter robot IP and click Connect
 
 ## Technical Details
 

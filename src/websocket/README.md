@@ -29,28 +29,7 @@ The WebViz WebSocket bridge provides a real-time, low-bandwidth connection betwe
 - **`webviz_config.lua`**: Default configuration file
 
 ## Configuration System
-
-### Design Philosophy
-
-WebViz uses the AMRL config-reader framework for configuration management, providing:
-
-- **No hardcoded paths**: Configuration file specified via command line
-- **Live reloading**: Configuration changes are detected and applied automatically
-- **Type safety**: Compile-time type checking for configuration parameters
-- **Universal compatibility**: Same system used across AMRL lab tools
-
-### Configuration File Selection
-
-```bash
-# Default configuration
-./bin/websocket
-
-# Custom configuration file
-./bin/websocket --config_file=config/my_robot_config.lua
-
-# Multiple files (precedence: later files override earlier ones)  
-./bin/websocket --config_file=config/base.lua,config/overrides.lua
-```
+WebViz uses the AMRL config-reader framework for configuration management and supports live reloading of configuration files during runtime.
 
 ### Configuration Structure
 
@@ -294,18 +273,3 @@ endif()
 - **ROS**: Version-specific packages (roscpp/rclcpp, sensor_msgs, etc.)
 - **AMRL**: amrl_msgs, shared utilities
 - **System**: glog, gflags, Lua 5.1
-
-## Usage Examples
-
-### Basic Operation
-
-```bash
-# Standard setup
-./bin/websocket
-
-# Verbose logging
-./bin/websocket --v=1
-
-# Custom configuration
-./bin/websocket --config_file=config/my_config.lua
-```
