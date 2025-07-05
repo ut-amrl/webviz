@@ -13,7 +13,7 @@ websocket = {
 -- ROS Topics Configuration
 ros_topics = {
   -- Input topics (subscribers)
-  laser_scan = "/scan";
+  laser_scan = "/Cobot/Laser";       -- Laser scan data
   visualization = "/visualization"; 
   localization = "/localization";
   
