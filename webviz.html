@@ -68,6 +68,36 @@
     <option value="EmptyMap">EmptyMap</option>
   </select>
   <br>
+  <details>
+    <summary>Advanced Configuration</summary>
+    <table>
+      <tr>
+        <td>WebSocket Port:</td>
+        <td><input type="number" id="port" value="10272" min="1" max="65535" size="6"></td>
+      </tr>
+      <tr>
+        <td>Laser Offset (m):</td>
+        <td><input type="number" id="laserOffset" value="0.2" step="0.01" size="6"></td>
+      </tr>
+      <tr>
+        <td>Update Rate (Hz):</td>
+        <td><input type="number" id="updateRate" value="20.0" step="0.1" size="6"></td>
+      </tr>
+      <tr>
+        <td>Position Threshold (m):</td>
+        <td><input type="number" id="positionThreshold" value="0.7" step="0.1" size="6"></td>
+      </tr>
+      <tr>
+        <td>Orientation Threshold (rad):</td>
+        <td><input type="number" id="orientationThreshold" value="3.0" step="0.1" size="6"></td>
+      </tr>
+      <tr>
+        <td>Waypoint Pause (sec):</td>
+        <td><input type="number" id="waypointPause" value="15.0" step="1.0" size="6"></td>
+      </tr>
+    </table>
+  </details>
+  <br>
   <canvas id="canvas" width="800" height="600" tabindex="0"> </canvas>
   <br>
   <label id="coords">0,0</label>
@@ -103,8 +133,32 @@
         document.getElementById('ipaddr').value =
           window.localStorage.getItem('ipaddr');
       }
+      if (window.localStorage.getItem('port')) {
+        document.getElementById('port').value =
+          window.localStorage.getItem('port');
+      }
+      if (window.localStorage.getItem('laserOffset')) {
+        document.getElementById('laserOffset').value =
+          window.localStorage.getItem('laserOffset');
+      }
+      if (window.localStorage.getItem('updateRate')) {
+        document.getElementById('updateRate').value =
+          window.localStorage.getItem('updateRate');
+      }
+      if (window.localStorage.getItem('positionThreshold')) {
+        document.getElementById('positionThreshold').value =
+          window.localStorage.getItem('positionThreshold');
+      }
+      if (window.localStorage.getItem('orientationThreshold')) {
+        document.getElementById('orientationThreshold').value =
+          window.localStorage.getItem('orientationThreshold');
+      }
+      if (window.localStorage.getItem('waypointPause')) {
+        document.getElementById('waypointPause').value =
+          window.localStorage.getItem('waypointPause');
+      }
     } catch (e) {
-      updateStatus('Unable to access localstorage, IP will not be saved');
+      updateStatus('Unable to access localstorage, settings will not be saved');
     }
     canvas.width = window.innerWidth;
     canvas.height = Math.max(600, window.innerHeight - 175);
@@ -376,7 +430,9 @@
           return;
         }
         try {
-          this.socket = new WebSocket("ws://" + hostname + ":10272");
+          // Extract hostname and port if provided together
+          let [host, port] = hostname.includes(':') ? hostname.split(':') : [hostname, '10272'];
+          this.socket = new WebSocket("ws://" + host + ":" + port);
         } catch (error) {
           this.onerror(error);
           return;
@@ -452,8 +508,9 @@
           if (resetNavGoals) {
             break;
           }
-          console.log(`%cAwaiting 15 seconds at waypoint ${i}`, 'color: gray;');
-          await new Promise(resolve => setTimeout(resolve, 15000)); // Wait for 15 seconds.
+          const waypointPause = parseFloat(document.getElementById('waypointPause').value) || 15.0;
+          console.log(`%cAwaiting ${waypointPause} seconds at waypoint ${i}`, 'color: gray;');
+          await new Promise(resolve => setTimeout(resolve, waypointPause * 1000)); // Wait for configured seconds.
           if (i == this.waypoints.length - 1) {
             console.log('%cLooping to start of waypoints array', 'color: pink; font-weight: bold;');
             i = -1;
@@ -518,8 +575,8 @@
     function comparePoses(pose1, pose2) {
       const [x1, y1, theta1] = pose1;
       const [x2, y2, theta2] = pose2;
-      const positionThreshold = 0.7;
-      const orientationThreshold = 3.0;
+      const positionThreshold = parseFloat(document.getElementById('positionThreshold').value) || 0.7;
+      const orientationThreshold = parseFloat(document.getElementById('orientationThreshold').value) || 3.0;
 
       x_ = Math.abs(x1 - x2);
       y_ = Math.abs(y1 - y2);
@@ -746,13 +803,20 @@
 
     function onopen(event) {
       let ipaddr = document.getElementById('ipaddr').value;
+      let port = document.getElementById('port').value;
       try {
-        window.localStorage.setItem('ipaddr', ipaddr)
+        window.localStorage.setItem('ipaddr', ipaddr);
+        window.localStorage.setItem('port', port);
+        window.localStorage.setItem('laserOffset', document.getElementById('laserOffset').value);
+        window.localStorage.setItem('updateRate', document.getElementById('updateRate').value);
+        window.localStorage.setItem('positionThreshold', document.getElementById('positionThreshold').value);
+        window.localStorage.setItem('orientationThreshold', document.getElementById('orientationThreshold').value);
+        window.localStorage.setItem('waypointPause', document.getElementById('waypointPause').value);
       } catch (e) {
         console.log('Localstorage denied');
       }
       document.getElementById("connect").value = "Disconnect";
-      updateStatus(`Connected to ${ipaddr}`);
+      updateStatus(`Connected to ${ipaddr}:${port}`);
     }
 
     function connect() {
@@ -764,6 +828,7 @@
       } else {
         // Connect.
         let ipaddr = document.getElementById('ipaddr').value;
+        let port = document.getElementById('port').value;
         let callbacks = {
           onReceiveRobotData: receiveData,
           onReceiveJSON: processJsonData,
@@ -771,7 +836,7 @@
           close: close
         };
         robot_interface = new RobotInterface();
-        robot_interface.connect(ipaddr, callbacks);
+        robot_interface.connect(ipaddr + ":" + port, callbacks);
       }
     }
 
@@ -831,8 +896,9 @@
     }
 
     function draw() {
-      const kDrawInterval = 0.03;
-      const tNow = window.performance.now();
+      const updateRate = parseFloat(document.getElementById('updateRate').value) || 20.0;
+      const kDrawInterval = 1.0 / updateRate;
+      const tNow = window.performance.now() * 0.001; // Convert to seconds
       if (tNow - tLastDraw < kDrawInterval) return;
       tLastDraw = tNow;
       // Clear canvas
@@ -1034,8 +1100,8 @@
       if (!lastLaserScan) return;
       let offset = { x: 0, y: 0, theta: 0 };
       if (robotPose) {
-        // Note: Assumes the laser is at (0.2, 0) on the robot.
-        const laserOffset = 0.2;
+        // Configurable laser offset on the robot
+        const laserOffset = parseFloat(document.getElementById('laserOffset').value) || 0.2;
         offset = {
           x: robotPose.x + laserOffset * Math.cos(robotPose.theta),
           y: robotPose.y + laserOffset * Math.sin(robotPose.theta),
