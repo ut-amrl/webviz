@@ -55,6 +55,7 @@
     <option value="GDC3">GDC3</option>
     <option value="AHG1">AHG1</option>
     <option value="AHG2">AHG2</option>
+    <option value="AHG2Lab">AHG2Lab</option>
     <option value="ICRA2022_F1Tenth_Track">ICRA2022_F1Tenth_Track</option>
     <option value="AHG2_Track">AHG2_Track</option>
     <option value="Slalom_Course">Slalom_Course</option>
@@ -547,9 +548,10 @@
         mapList.appendChild(opt);
         mapList.selectedIndex = mapList.options.length - 1;
       }
-      let url = `https://amrl.cs.utexas.edu/amrl_maps/${mapName}/${mapName}.vectormap.json`;
-      // for other branches:
-      // let url = `https://raw.githubusercontent.com/ut-amrl/amrl_maps/${branchName}/${mapName}/${mapName}.vectormap.json`;
+      // let url = `https://amrl.cs.utexas.edu/amrl_maps/${mapName}/${mapName}.vectormap.json`;
+      // TODO: make it a part of advanced config menu
+      const branchName = 'ros2_dev';
+      let url = `https://raw.githubusercontent.com/ut-amrl/amrl_maps/${branchName}/${mapName}/${mapName}.vectormap.json`;
       console.log(`Loading "${url}"`);
       var xhr = new XMLHttpRequest();
       // xhr.responseType = 'json';
