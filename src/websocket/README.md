@@ -59,7 +59,7 @@ ros_topics = {
 
 -- Frame configuration
 frames = {
-  robot_frame = "base_link";       -- Robot-relative frame
+  robot_frame = "nav_base_link";       -- Robot-relative frame
   world_frame = "map";             -- Global/map frame
 };
 ```
@@ -178,7 +178,7 @@ struct WebSocketMessage {
 
 WebViz processes two coordinate frames:
 
-- **Robot Frame** (`CONFIG_robot_frame`): Typically "base_link"
+- **Robot Frame** (`CONFIG_robot_frame`): Typically "nav_base_link"
   - Moves with the robot
   - Used for sensor data, local visualizations
   

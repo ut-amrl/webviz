@@ -38,7 +38,7 @@ ros_node = {
 
 -- Frame Configuration
 frames = {
-  robot_frame = "base_link";       -- Robot-relative frame
+  robot_frame = "nav_base_link";       -- Robot-relative frame
   world_frame = "map";             -- World/global frame
 };
 
