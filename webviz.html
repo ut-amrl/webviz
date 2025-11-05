@@ -25,6 +25,19 @@
 
     #cursorCoords {
       position: fixed;
+      bottom: 50px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 5px 10px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 12px;
+      z-index: 1000;
+    }
+
+    #robotLocation {
+      position: fixed;
       bottom: 10px;
       left: 10px;
       background: rgba(255, 255, 255, 0.9);
@@ -113,8 +126,8 @@
   <br>
   <canvas id="canvas" width="800" height="600" tabindex="0"> </canvas>
   <br>
-  <label id="robotLocation">Robot: --</label>
   <div id="cursorCoords">Cursor: --</div>
+  <div id="robotLocation">Robot: --</div>
 
 
   <script type="text/javascript">
@@ -845,7 +858,7 @@
         const x_str = robotPose.x.toFixed(3);
         const y_str = robotPose.y.toFixed(3);
         const theta_str = robotPose.theta.toFixed(3);
-        document.getElementById("robotLocation").innerHTML = `Robot: x=${x_str}, y=${y_str}, θ=${theta_str} rad`;
+        document.getElementById("robotLocation").innerHTML = `Robot: x=${x_str}, y=${y_str}, θ=${theta_str} rad, map=${currentMapName}`;
       }
     }
 
