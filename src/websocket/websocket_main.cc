@@ -35,8 +35,10 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "amrl_msgs/msg/visualization_msg.hpp"
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
+#include "amrl_msgs/msg/nav_status_msg.hpp"
 using amrl_msgs::msg::Localization2DMsg;
 using amrl_msgs::msg::VisualizationMsg;
+using amrl_msgs::msg::NavStatusMsg;
 using geometry_msgs::msg::PoseStamped;
 using geometry_msgs::msg::PoseWithCovarianceStamped;
 using sensor_msgs::msg::LaserScan;
@@ -48,8 +50,10 @@ using std_msgs::msg::Empty;
 #include "sensor_msgs/LaserScan.h"
 #include "amrl_msgs/VisualizationMsg.h"
 #include "amrl_msgs/Localization2DMsg.h"
+#include "amrl_msgs/NavStatusMsg.h"
 using amrl_msgs::Localization2DMsg;
 using amrl_msgs::VisualizationMsg;
+using amrl_msgs::NavStatusMsg;
 using geometry_msgs::PoseStamped;
 using geometry_msgs::PoseWithCovarianceStamped;
 using sensor_msgs::LaserScan;
@@ -86,6 +90,7 @@ CONFIG_INT(pub_queue_size, "ros_node.queue_sizes.publishers");
 CONFIG_STRING(laser_topic, "ros_topics.laser_scan");
 CONFIG_STRING(viz_topic, "ros_topics.visualization");
 CONFIG_STRING(loc_topic, "ros_topics.localization");
+CONFIG_STRING(nav_status_topic, "ros_topics.nav_status");
 CONFIG_STRING(init_pose_std_topic, "ros_topics.initial_pose_std");
 CONFIG_STRING(nav_goal_std_topic, "ros_topics.nav_goal_std");
 CONFIG_STRING(init_pose_amrl_topic, "ros_topics.initial_pose_amrl");
@@ -116,6 +121,7 @@ Localization2DMsg amrl_nav_goal_msg_;
 Empty reset_nav_goals_msg_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
+NavStatusMsg nav_status_msg_;
 NodePtr node_;
 PublisherPtr<PoseWithCovarianceStamped> init_loc_pub_;
 PublisherPtr<Localization2DMsg> amrl_init_loc_pub_;
@@ -130,10 +136,12 @@ RobotWebSocket *server_ = nullptr;
 SubscriberPtr<LaserScan> laser_sub_;
 SubscriberPtr<VisualizationMsg> vis_sub_;
 SubscriberPtr<Localization2DMsg> localization_sub_;
+SubscriberPtr<NavStatusMsg> nav_status_sub_;
 #else
 SubscriberPtr<LaserScan> laser_sub_;
 SubscriberPtr<VisualizationMsg> vis_sub_;
 SubscriberPtr<Localization2DMsg> localization_sub_;
+SubscriberPtr<NavStatusMsg> nav_status_sub_;
 #endif
 
 // Track current topic names to detect changes
@@ -176,6 +184,13 @@ CurrentConfig current_config_;
 
 void LocalizationCallback(const Localization2DMsg &msg) {
     localization_msg_ = msg;
+}
+
+void NavStatusCallback(const NavStatusMsg &msg) {
+    nav_status_msg_ = msg;
+    if (server_ != nullptr) {
+        server_->SendNavStatus(msg.status);
+    }
 }
 
 void LaserCallback(const LaserScan &msg) {
@@ -334,6 +349,7 @@ void CreateSubscriptions() {
         printf("  Laser: %s\n", CONFIG_laser_topic.c_str());
         printf("  Visualization: %s\n", CONFIG_viz_topic.c_str());
         printf("  Localization: %s\n", CONFIG_loc_topic.c_str());
+        printf("  Nav Status: %s\n", CONFIG_nav_status_topic.c_str());
     }
 
 #ifdef ROS2
@@ -347,14 +363,19 @@ void CreateSubscriptions() {
     auto loc_callback = [](const Localization2DMsg::SharedPtr msg) {
         LocalizationCallback(*msg);
     };
+    auto nav_status_callback = [](const NavStatusMsg::SharedPtr msg) {
+        NavStatusCallback(*msg);
+    };
 
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
+    nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, 10, nav_status_callback);
 #else
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
+    nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, 10, &NavStatusCallback);
 #endif
 
     // Update tracked topic names

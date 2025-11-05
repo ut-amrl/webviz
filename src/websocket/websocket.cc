@@ -213,15 +213,15 @@ DataMessage GenerateTestData(const MessageHeader& h) {
         }
         const uint8_t x = static_cast<uint8_t>(i);
         msg.arcs[i].color = (x << 16) | (x << 8) | x;
-
-        for (size_t i = 0; i < msg.text_annotations.size(); i++) {
-            msg.text_annotations[i].start.x = 1.0 * i;
-            msg.text_annotations[i].start.y = 2.0 * i;
-            msg.text_annotations[i].color = (x << 16) | (x << 8) | x;
-            msg.text_annotations[i].size_em = 3.0 * i;
-            const char* s = std::to_string(i).c_str();
-            strncpy(msg.text_annotations[i].text, s, i / 10);
-        }
+    }
+    for (size_t j = 0; j < msg.text_annotations.size(); j++) {
+        msg.text_annotations[j].start.x = 1.0 * j;
+        msg.text_annotations[j].start.y = 2.0 * j;
+        const uint8_t x = static_cast<uint8_t>(j);
+        msg.text_annotations[j].color = (x << 16) | (x << 8) | x;
+        msg.text_annotations[j].size_em = 3.0 * j;
+        const char* s = std::to_string(j).c_str();
+        strncpy(msg.text_annotations[j].text, s, j / 10);
     }
     return msg;
 }
@@ -344,6 +344,14 @@ void RobotWebSocket::SendError(const QString& error_val) {
     }
 }
 
+void RobotWebSocket::SendNavStatus(uint8_t status) {
+    QString json = QString("{ \"type\": \"nav_status\", \"status\": %1 }").arg(status);
+    for (auto c : clients_) {
+        CHECK_NOTNULL(c);
+        c->sendTextMessage(json);
+    }
+}
+
 bool AllNumericalKeysPresent(const QStringList& expected,
                              const QJsonObject& json) {
     for (const QString& key : expected) {
@@ -376,6 +384,7 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
         if (!AllNumericalKeysPresent({"x", "y", "theta"}, json) ||
             !StringKeyPresent("map", json)) {
             SendError("Invalid set_initial_pose parameters");
+            return;
         }
         SetInitialPoseSignal(json.value("x").toDouble(),
                              json.value("y").toDouble(),
@@ -385,6 +394,7 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
         if (!AllNumericalKeysPresent({"x", "y", "theta"}, json) ||
             !StringKeyPresent("map", json)) {
             SendError("Invalid set_nav_goal parameters");
+            return;
         }
         SetNavGoalSignal(json.value("x").toDouble(),
                          json.value("y").toDouble(),

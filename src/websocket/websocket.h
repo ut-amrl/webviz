@@ -128,6 +128,7 @@ class RobotWebSocket : public QObject {
               const VisualizationMsg& global_vis,
               const LaserScan& laser_scan,
               const Localization2DMsg& localization);
+    void SendNavStatus(uint8_t status);
 
    Q_SIGNALS:
     void closed();

@@ -16,6 +16,7 @@ ros_topics = {
   laser_scan = "/scan";
   visualization = "/visualization"; 
   localization = "/localization";
+  nav_status = "/navigation_goal_status";
   
   -- Output topics (publishers)
   initial_pose_std = "/initialpose";           -- Standard ROS nav stack

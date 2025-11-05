@@ -23,6 +23,19 @@
       /* mobile webkit */
     }
 
+    #cursorCoords {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 5px 10px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 12px;
+      z-index: 1000;
+    }
+
     input[type=button] {
       user-select: none;
       -webkit-user-select: none;
@@ -100,10 +113,11 @@
   <br>
   <canvas id="canvas" width="800" height="600" tabindex="0"> </canvas>
   <br>
-  <label id="coords">0,0</label>
+  <label id="robotLocation">Robot: --</label>
+  <div id="cursorCoords">Cursor: --</div>
 
 
-  <script type="text/javascript" type="text/javascript">
+  <script type="text/javascript">
     var canvas = document.getElementById("canvas");
     var visMsg = undefined;
     var scale = 20;
@@ -119,7 +133,7 @@
     var setNavGoal = false;
     var setWaypoints = false;
     var resetNavGoals = false;
-    var coords = document.getElementById("coords");
+    var cursorCoords = document.getElementById("cursorCoords");
     var mapList = document.getElementById("map");
     var robotPose = undefined;
     var tLastDraw = 0;
@@ -127,6 +141,9 @@
     var lastLaserScan = undefined;
     var robot_interface = undefined;
     var currentMapName = '';
+    var navStatus = undefined;
+    const NAV_STATE_STOPPED = 0;
+    var currentNavGoal = undefined;
 
     try {
       if (window.localStorage.getItem('ipaddr')) {
@@ -404,11 +421,11 @@
       }
 
       onclose(e) {
-        if (event.wasClean) {
-          console.log(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);
+        if (e.wasClean) {
+          console.log(`[close] Connection closed cleanly, code=${e.code} reason=${e.reason}`);
         } else {
           // e.g. server process killed or network down
-          // event.code is usually 1006 in this case
+          // e.code is usually 1006 in this case
           console.log('[close] Connection died');
         }
         if (this.callbacks.onclose) this.callbacks.onclose(e);
@@ -418,7 +435,7 @@
 
       onerror(error) {
         console.log(`[error] ${error.message}`);
-        if (this.callbacks.onerror) this.callbacks.onerror(e);
+        if (this.callbacks.onerror) this.callbacks.onerror(error);
       }
 
       // Connect to a host.
@@ -464,6 +481,7 @@
           console.error('Error: not connected');
           return;
         }
+        currentNavGoal = { x: x, y: y, theta: theta };
         this.socket.send(JSON.stringify({
           type: "set_nav_goal",
           x: x,
@@ -476,6 +494,7 @@
       // Reset all navgoals and waypoints.
       resetNavGoals() {
         this.waypoints = [];
+        currentNavGoal = undefined;
         if (!this.socket) {
           console.error('Error: not connected');
           return;
@@ -489,13 +508,19 @@
       async gotoWaypoint(idx) {
         console.log(`%cEntered gotoWaypoint for index ${idx}`, 'color: blue;');
         this.setNavGoal(this.waypoints[idx][0], this.waypoints[idx][1], this.waypoints[idx][2]);
+        let navigationStarted = false;
         while (true) {
           if (resetNavGoals) {
             break;
           }
-          if (comparePoses([robotPose.x, robotPose.y, robotPose.theta], this.waypoints[idx])) {
-            console.log('Reached the waypoint');
-            break; // Exit the loop if the robot has reached the waypoint.
+          if (navStatus !== undefined) {
+            if (!navigationStarted && navStatus !== NAV_STATE_STOPPED) {
+              navigationStarted = true;
+            }
+            if (navigationStarted && navStatus === NAV_STATE_STOPPED) {
+              console.log('Reached the waypoint');
+              break; // Exit the loop if the robot has stopped (reached waypoint).
+            }
           }
           await new Promise(resolve => setTimeout(resolve, 100)); // Wait for 100 ms.
         }
@@ -579,9 +604,9 @@
       const positionThreshold = parseFloat(document.getElementById('positionThreshold').value) || 0.7;
       const orientationThreshold = parseFloat(document.getElementById('orientationThreshold').value) || 3.0;
 
-      x_ = Math.abs(x1 - x2);
-      y_ = Math.abs(y1 - y2);
-      theta_ = Math.abs(theta1 - theta2);
+      const x_ = Math.abs(x1 - x2);
+      const y_ = Math.abs(y1 - y2);
+      const theta_ = Math.abs(theta1 - theta2);
       // console.log(`%cx_: ${x_}, y_: ${y_}, theta_: ${theta_}`, 'color: gray;');
       return (x_ < positionThreshold && y_ < positionThreshold && theta_ < orientationThreshold);
     }
@@ -676,10 +701,10 @@
 
     function onMouseMove(event) {
       curMouseLoc = getMouseLocation(event, canvas);
-      w = canvasToWorld(curMouseLoc);
+      const w = canvasToWorld(curMouseLoc);
       const x_str = w.x.toFixed(3);
       const y_str = w.y.toFixed(3);
-      coords.innerHTML = `x=${x_str}, y=${y_str}`;
+      cursorCoords.innerHTML = `Cursor: x=${x_str}, y=${y_str}, map=${currentMapName}`;
       if (!mouseDown) return;
       if (setLocation || setNavGoal || setWaypoints) return;
       origin.x = prev_origin.x + curMouseLoc.x - mouseDownLoc.x;
@@ -761,6 +786,34 @@
       ctx.fillRect(p.x, p.y, 2, 2);
     }
 
+    function drawCircle(color, x, y, radius, filled) {
+      const p = worldToCanvas({ x: x, y: y });
+      const r = radius * scale;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, 2 * Math.PI);
+      if (filled) {
+        ctx.fillStyle = color;
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    function drawNavGoal() {
+      if (currentNavGoal === undefined) return;
+      drawCircle("#0000FF", currentNavGoal.x, currentNavGoal.y, 0.3, true);
+    }
+
+    function drawWaypoints() {
+      if (!robot_interface || !robot_interface.waypoints) return;
+      for (let i = 0; i < robot_interface.waypoints.length; i++) {
+        const wp = robot_interface.waypoints[i];
+        drawCircle("#808080", wp[0], wp[1], 0.4, false);
+      }
+    }
+
     function drawLine(color, x1, y1, x2, y2) {
       ctx.strokeStyle = color;
       ctx.beginPath();
@@ -788,11 +841,20 @@
       visMsg = d;
       lastLaserScan = d.laser;
       robotPose = d.robotPose;
+      if (robotPose !== undefined) {
+        const x_str = robotPose.x.toFixed(3);
+        const y_str = robotPose.y.toFixed(3);
+        const theta_str = robotPose.theta.toFixed(3);
+        document.getElementById("robotLocation").innerHTML = `Robot: x=${x_str}, y=${y_str}, θ=${theta_str} rad`;
+      }
     }
 
     function processJsonData(json) {
       console.log("Received JSON:");
       console.log(json);
+      if (json.type === "nav_status" && json.status !== undefined) {
+        navStatus = json.status;
+      }
     }
 
     function close(event) {
@@ -910,6 +972,8 @@
       }
       drawGrid();
       drawMap();
+      drawNavGoal();
+      drawWaypoints();
       drawLaserScan();
       drawPoints();
       drawLines();
@@ -918,8 +982,8 @@
       if (mouseDown) {
         // console.log(mouseDownLoc);
         // console.log(curMouseLoc);
-        p0 = canvasToWorld(mouseDownLoc);
-        p1 = canvasToWorld(curMouseLoc);
+        const p0 = canvasToWorld(mouseDownLoc);
+        const p1 = canvasToWorld(curMouseLoc);
         drawLine("#000000", p0.x, p0.y, p1.x, p1.y);
       }
       if (visMsg) drawPose(visMsg.header.robot_pose, 'rgb(0, 150, 0)');
@@ -932,7 +996,7 @@
     function drawPoints() {
       if (visMsg === undefined) return;
       visMsg.points.forEach(function (p, i) {
-        point = p.point;
+        let point = p.point;
         if (i < visMsg.header.num_local_points) {
           point = robotToMap(point);
         }
