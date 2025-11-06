@@ -37,6 +37,7 @@
 #include <QtCore/QDebug>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QMetaType>
 
 #ifdef ROS2
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
@@ -96,6 +97,7 @@ RobotWebSocket::RobotWebSocket(uint16_t port) : ws_server_(new QWebSocketServer(
                                                 global_vis_(),
                                                 laser_scan_(),
                                                 localization_() {
+    qRegisterMetaType<uint8_t>("uint8_t");
     if (ws_server_->listen(QHostAddress::Any, port)) {
         printf("WebViz listening on port %d\n", port);
         connect(ws_server_, &QWebSocketServer::newConnection,
@@ -125,6 +127,8 @@ void RobotWebSocket::onNewConnection() {
             this, &RobotWebSocket::socketDisconnected);
     connect(this, &RobotWebSocket::SendDataSignal,
             this, &RobotWebSocket::SendDataSlot);
+    connect(this, &RobotWebSocket::NavStatusSignal,
+            this, &RobotWebSocket::NavStatusSlot);
 
     clients_.push_back(socket);
 }
@@ -350,6 +354,10 @@ void RobotWebSocket::SendNavStatus(uint8_t status) {
         CHECK_NOTNULL(c);
         c->sendTextMessage(json);
     }
+}
+
+void RobotWebSocket::NavStatusSlot(uint8_t status) {
+    SendNavStatus(status);
 }
 
 bool AllNumericalKeysPresent(const QStringList& expected,

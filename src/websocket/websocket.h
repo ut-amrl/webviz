@@ -136,6 +136,7 @@ class RobotWebSocket : public QObject {
     void SetInitialPoseSignal(float x, float y, float theta, QString map);
     void SetNavGoalSignal(float x, float y, float theta, QString map);
     void ResetNavGoalsSignal();
+    void NavStatusSignal(uint8_t status);
 
    private Q_SLOTS:
     void onNewConnection();
@@ -143,6 +144,7 @@ class RobotWebSocket : public QObject {
     void processBinaryMessage(QByteArray message);
     void socketDisconnected();
     void SendDataSlot();
+    void NavStatusSlot(uint8_t status);
 
    private:
     void ProcessCallback(const QJsonObject& json);

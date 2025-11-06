@@ -189,7 +189,7 @@ void LocalizationCallback(const Localization2DMsg &msg) {
 void NavStatusCallback(const NavStatusMsg &msg) {
     nav_status_msg_ = msg;
     if (server_ != nullptr) {
-        server_->SendNavStatus(msg.status);
+        Q_EMIT server_->NavStatusSignal(msg.status);
     }
 }
 
