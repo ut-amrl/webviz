@@ -102,24 +102,24 @@
         <td><input type="number" id="port" value="10272" min="1" max="65535" size="6"></td>
       </tr>
       <tr>
-        <td>Laser Offset (m):</td>
-        <td><input type="number" id="laserOffset" value="0.2" step="0.01" size="6"></td>
+        <td>Laser Offset X (m):</td>
+        <td><input type="number" id="laserOffsetX" value="0.2" step="0.01" size="6"></td>
       </tr>
       <tr>
         <td>Update Rate (Hz):</td>
         <td><input type="number" id="updateRate" value="20.0" step="0.1" size="6"></td>
       </tr>
       <tr>
-        <td>Position Threshold (m):</td>
-        <td><input type="number" id="positionThreshold" value="0.7" step="0.1" size="6"></td>
-      </tr>
-      <tr>
-        <td>Orientation Threshold (rad):</td>
-        <td><input type="number" id="orientationThreshold" value="3.0" step="0.1" size="6"></td>
-      </tr>
-      <tr>
         <td>Waypoint Pause (sec):</td>
         <td><input type="number" id="waypointPause" value="15.0" step="1.0" size="6"></td>
+      </tr>
+      <tr>
+        <td>Nav Goal Marker Size (m):</td>
+        <td><input type="number" id="navGoalSize" value="0.1" step="0.01" size="6"></td>
+      </tr>
+      <tr>
+        <td>Waypoint Marker Size (m):</td>
+        <td><input type="number" id="waypointSize" value="0.2" step="0.01" size="6"></td>
       </tr>
     </table>
   </details>
@@ -167,25 +167,25 @@
         document.getElementById('port').value =
           window.localStorage.getItem('port');
       }
-      if (window.localStorage.getItem('laserOffset')) {
-        document.getElementById('laserOffset').value =
-          window.localStorage.getItem('laserOffset');
+      if (window.localStorage.getItem('laserOffsetX')) {
+        document.getElementById('laserOffsetX').value =
+          window.localStorage.getItem('laserOffsetX');
       }
       if (window.localStorage.getItem('updateRate')) {
         document.getElementById('updateRate').value =
           window.localStorage.getItem('updateRate');
       }
-      if (window.localStorage.getItem('positionThreshold')) {
-        document.getElementById('positionThreshold').value =
-          window.localStorage.getItem('positionThreshold');
-      }
-      if (window.localStorage.getItem('orientationThreshold')) {
-        document.getElementById('orientationThreshold').value =
-          window.localStorage.getItem('orientationThreshold');
-      }
       if (window.localStorage.getItem('waypointPause')) {
         document.getElementById('waypointPause').value =
           window.localStorage.getItem('waypointPause');
+      }
+      if (window.localStorage.getItem('navGoalSize')) {
+        document.getElementById('navGoalSize').value =
+          window.localStorage.getItem('navGoalSize');
+      }
+      if (window.localStorage.getItem('waypointSize')) {
+        document.getElementById('waypointSize').value =
+          window.localStorage.getItem('waypointSize');
       }
     } catch (e) {
       updateStatus('Unable to access localstorage, settings will not be saved');
@@ -611,19 +611,6 @@
       xhr.send();
     }
 
-    function comparePoses(pose1, pose2) {
-      const [x1, y1, theta1] = pose1;
-      const [x2, y2, theta2] = pose2;
-      const positionThreshold = parseFloat(document.getElementById('positionThreshold').value) || 0.7;
-      const orientationThreshold = parseFloat(document.getElementById('orientationThreshold').value) || 3.0;
-
-      const x_ = Math.abs(x1 - x2);
-      const y_ = Math.abs(y1 - y2);
-      const theta_ = Math.abs(theta1 - theta2);
-      // console.log(`%cx_: ${x_}, y_: ${y_}, theta_: ${theta_}`, 'color: gray;');
-      return (x_ < positionThreshold && y_ < positionThreshold && theta_ < orientationThreshold);
-    }
-
     function setLocationButton() {
       setLocation = true;
       setNavGoal = false;
@@ -816,14 +803,16 @@
 
     function drawNavGoal() {
       if (currentNavGoal === undefined) return;
-      drawCircle("#0000FF", currentNavGoal.x, currentNavGoal.y, 0.2, true);
+      const navGoalSize = parseFloat(document.getElementById('navGoalSize').value) || 0.1;
+      drawCircle("#404040", currentNavGoal.x, currentNavGoal.y, navGoalSize, true);
     }
 
     function drawWaypoints() {
       if (!robot_interface || !robot_interface.waypoints) return;
+      const waypointSize = parseFloat(document.getElementById('waypointSize').value) || 0.2;
       for (let i = 0; i < robot_interface.waypoints.length; i++) {
         const wp = robot_interface.waypoints[i];
-        drawCircle("#808080", wp[0], wp[1], 0.3, false);
+        drawCircle("#808080", wp[0], wp[1], waypointSize, false);
       }
     }
 
@@ -883,11 +872,11 @@
       try {
         window.localStorage.setItem('ipaddr', ipaddr);
         window.localStorage.setItem('port', port);
-        window.localStorage.setItem('laserOffset', document.getElementById('laserOffset').value);
+        window.localStorage.setItem('laserOffsetX', document.getElementById('laserOffsetX').value);
         window.localStorage.setItem('updateRate', document.getElementById('updateRate').value);
-        window.localStorage.setItem('positionThreshold', document.getElementById('positionThreshold').value);
-        window.localStorage.setItem('orientationThreshold', document.getElementById('orientationThreshold').value);
         window.localStorage.setItem('waypointPause', document.getElementById('waypointPause').value);
+        window.localStorage.setItem('navGoalSize', document.getElementById('navGoalSize').value);
+        window.localStorage.setItem('waypointSize', document.getElementById('waypointSize').value);
       } catch (e) {
         console.log('Localstorage denied');
       }
@@ -1178,11 +1167,11 @@
       if (!lastLaserScan) return;
       let offset = { x: 0, y: 0, theta: 0 };
       if (robotPose) {
-        // Configurable laser offset on the robot
-        const laserOffset = parseFloat(document.getElementById('laserOffset').value) || 0.2;
+        // Configurable laser offset forward (X direction) on the robot
+        const laserOffsetX = parseFloat(document.getElementById('laserOffsetX').value) || 0.2;
         offset = {
-          x: robotPose.x + laserOffset * Math.cos(robotPose.theta),
-          y: robotPose.y + laserOffset * Math.sin(robotPose.theta),
+          x: robotPose.x + laserOffsetX * Math.cos(robotPose.theta),
+          y: robotPose.y + laserOffsetX * Math.sin(robotPose.theta),
           theta: robotPose.theta
         };
       }
