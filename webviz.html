@@ -816,14 +816,14 @@
 
     function drawNavGoal() {
       if (currentNavGoal === undefined) return;
-      drawCircle("#0000FF", currentNavGoal.x, currentNavGoal.y, 0.3, true);
+      drawCircle("#0000FF", currentNavGoal.x, currentNavGoal.y, 0.2, true);
     }
 
     function drawWaypoints() {
       if (!robot_interface || !robot_interface.waypoints) return;
       for (let i = 0; i < robot_interface.waypoints.length; i++) {
         const wp = robot_interface.waypoints[i];
-        drawCircle("#808080", wp[0], wp[1], 0.4, false);
+        drawCircle("#808080", wp[0], wp[1], 0.3, false);
       }
     }
 
