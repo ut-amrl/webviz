@@ -5,7 +5,7 @@
 -- WebSocket Server Configuration
 websocket = {
   port = 10272;                    -- WebSocket server port
-  update_rate_hz = 10.0;           -- Visualization update rate (fps)
+  update_rate_hz = 40.0;           -- Visualization update rate (fps)
   message_timeout_sec = 2.0;       -- Maximum age before messages are dropped
   exit_check_interval_ms = 100;    -- Timer interval for exit signal checking
 };

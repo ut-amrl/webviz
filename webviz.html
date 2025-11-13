@@ -107,11 +107,11 @@
       </tr>
       <tr>
         <td>Update Rate (Hz):</td>
-        <td><input type="number" id="updateRate" value="20.0" step="0.1" size="6"></td>
+        <td><input type="number" id="updateRate" value="40.0" step="0.1" size="6"></td>
       </tr>
       <tr>
         <td>Waypoint Pause (sec):</td>
-        <td><input type="number" id="waypointPause" value="15.0" step="1.0" size="6"></td>
+        <td><input type="number" id="waypointPause" value="10.0" step="1.0" size="6"></td>
       </tr>
       <tr>
         <td>Nav Goal Marker Size (m):</td>
@@ -546,7 +546,7 @@
           if (resetNavGoals) {
             break;
           }
-          const waypointPause = parseFloat(document.getElementById('waypointPause').value) || 15.0;
+          const waypointPause = parseFloat(document.getElementById('waypointPause').value) || 10.0;
           console.log(`%cAwaiting ${waypointPause} seconds at waypoint ${i}`, 'color: gray;');
           await new Promise(resolve => setTimeout(resolve, waypointPause * 1000)); // Wait for configured seconds.
           if (i == this.waypoints.length - 1) {
@@ -961,7 +961,7 @@
     }
 
     function draw() {
-      const updateRate = parseFloat(document.getElementById('updateRate').value) || 20.0;
+      const updateRate = parseFloat(document.getElementById('updateRate').value) || 40.0;
       const kDrawInterval = 1.0 / updateRate;
       const tNow = window.performance.now() * 0.001; // Convert to seconds
       if (tNow - tLastDraw < kDrawInterval) return;
