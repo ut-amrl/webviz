@@ -33,6 +33,7 @@ ros_node = {
     laser_scan = 5;                -- Laser scan subscriber queue
     visualization = 10;            -- Visualization subscriber queue  
     localization = 10;             -- Localization subscriber queue
+    nav_status = 10;               -- Navigation status subscriber queue
     publishers = 10;               -- All publisher queues
   };
 };

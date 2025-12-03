@@ -85,6 +85,7 @@ CONFIG_STRING(ros_node_name, "ros_node.name");
 CONFIG_INT(laser_queue_size, "ros_node.queue_sizes.laser_scan");
 CONFIG_INT(viz_queue_size, "ros_node.queue_sizes.visualization");
 CONFIG_INT(loc_queue_size, "ros_node.queue_sizes.localization");
+CONFIG_INT(nav_status_queue_size, "ros_node.queue_sizes.nav_status");
 CONFIG_INT(pub_queue_size, "ros_node.queue_sizes.publishers");
 
 CONFIG_STRING(laser_topic, "ros_topics.laser_scan");
@@ -370,12 +371,12 @@ void CreateSubscriptions() {
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
-    nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, 10, nav_status_callback);
+    nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, CONFIG_nav_status_queue_size, nav_status_callback);
 #else
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
-    nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, 10, &NavStatusCallback);
+    nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, CONFIG_nav_status_queue_size, &NavStatusCallback);
 #endif
 
     // Update tracked topic names
