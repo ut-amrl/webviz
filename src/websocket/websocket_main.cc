@@ -287,6 +287,7 @@ void SetInitialPose(float x, float y, float theta, QString map) {
         printf("Set initial pose: %s %f,%f, %f\n",
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
+    initial_pose_msg_.header.frame_id = CONFIG_world_frame;
     initial_pose_msg_.header.stamp = GET_TIME();
     initial_pose_msg_.pose.pose.position.x = x;
     initial_pose_msg_.pose.pose.position.y = y;
