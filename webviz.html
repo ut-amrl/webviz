@@ -152,6 +152,9 @@
     var robotPose = undefined;
     var tLastDraw = 0;
     var map = [];
+    // Navigation graph for current map
+    var navGraph = null;       // { nodes: [...], edges: [...] }
+    var navNodesById = {};     // id -> {x, y}
     var lastLaserScan = undefined;
     var robot_interface = undefined;
     var currentMapName = '';
@@ -570,6 +573,9 @@
     }
 
     function loadMap(mapName) {
+      // Reset nav graph for new map
+      navGraph = null;
+      navNodesById = {};
       let found = false;
       for (var opt, j = 0; opt = mapList.options[j]; j++) {
         if (opt.value == mapName) {
@@ -610,6 +616,39 @@
       };
       xhr.open('GET', url, true);
       xhr.send();
+
+      // Load navigation graph (nodes/edges) from the same repo/branch
+      let navUrl = `https://raw.githubusercontent.com/ut-amrl/amrl_maps/${branchName}/${mapName}/${mapName}.navigation.json`;
+      console.log(`Loading "${navUrl}"`);
+      var navXhr = new XMLHttpRequest();
+      navXhr.onload = function () {
+        var status = navXhr.status;
+        if (status === 200) {
+          try {
+            navGraph = JSON.parse(navXhr.response);
+            // Build quick lookup for node id -> location
+            navNodesById = {};
+            if (navGraph && Array.isArray(navGraph.nodes)) {
+              for (let i = 0; i < navGraph.nodes.length; i++) {
+                const n = navGraph.nodes[i];
+                if (n && n.id !== undefined && n.loc) {
+                  navNodesById[n.id] = { x: n.loc.x, y: n.loc.y };
+                }
+              }
+            }
+          } catch (e) {
+            console.error(`Error parsing navigation: ${e}`);
+            navGraph = null;
+            navNodesById = {};
+            return;
+          }
+          console.log(`Loaded navigation for "${mapName}"`);
+        } else {
+          console.log(`Error loading navigation for "${mapName}"`);
+        }
+      };
+      navXhr.open('GET', navUrl, true);
+      navXhr.send();
     }
 
     function setLocationButton() {
@@ -939,6 +978,24 @@
       });
     }
 
+    // Draw navigation graph (edges + nodes) in orange
+    function drawNavGraph() {
+      if (!navGraph) return;
+      const edgeColor = "#FFA500"; // orange
+      // Draw edges
+      if (Array.isArray(navGraph.edges)) {
+        for (let i = 0; i < navGraph.edges.length; i++) {
+          const e = navGraph.edges[i];
+          const p0 = navNodesById[e.s0_id];
+          const p1 = navNodesById[e.s1_id];
+          if (p0 && p1) {
+            drawLine(edgeColor, p0.x, p0.y, p1.x, p1.y);
+          }
+        }
+      }
+      // Nodes not drawn; edges are sufficient for visualization
+    }
+
     function drawPose(p, color) {
       const l = 0.5;
       const h = 0.1;
@@ -975,6 +1032,7 @@
       }
       drawGrid();
       drawMap();
+      drawNavGraph();
       drawNavGoal();
       drawWaypoints();
       drawLaserScan();
