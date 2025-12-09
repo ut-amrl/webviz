@@ -132,6 +132,11 @@ PublisherPtr<Empty> reset_nav_goals_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
 
+// Default pose uncertainties (expressed as variances)
+constexpr double kInitPoseVarianceXY = 0.25;                      // (0.5 m)^2
+constexpr double kInitPoseVarianceTheta =
+    math_util::DegToRad(10.0) * math_util::DegToRad(10.0);        // (10 deg)^2
+
 // Track current subscriptions for dynamic reconfiguration
 #ifdef ROS2
 SubscriberPtr<LaserScan> laser_sub_;
@@ -304,10 +309,19 @@ void SetInitialPose(float x, float y, float theta, QString map) {
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
     initial_pose_msg_.header.stamp = GET_TIME();
+    initial_pose_msg_.header.frame_id = CONFIG_world_frame;
     initial_pose_msg_.pose.pose.position.x = x;
     initial_pose_msg_.pose.pose.position.y = y;
+    initial_pose_msg_.pose.pose.position.z = 0.0;
+    initial_pose_msg_.pose.pose.orientation.x = 0.0;
+    initial_pose_msg_.pose.pose.orientation.y = 0.0;
     initial_pose_msg_.pose.pose.orientation.w = cos(0.5 * theta);
     initial_pose_msg_.pose.pose.orientation.z = sin(0.5 * theta);
+    auto &cov = initial_pose_msg_.pose.covariance;
+    std::fill(cov.begin(), cov.end(), 0.0);
+    cov[0] = kInitPoseVarianceXY;
+    cov[7] = kInitPoseVarianceXY;
+    cov[35] = kInitPoseVarianceTheta;
     PUBLISH(init_loc_pub_, initial_pose_msg_);
     amrl_initial_pose_msg_.header.stamp = GET_TIME();
     amrl_initial_pose_msg_.map = map.toStdString();
@@ -330,8 +344,12 @@ void SetNavGoal(float x, float y, float theta, QString map) {
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
     nav_goal_msg_.header.stamp = GET_TIME();
+    nav_goal_msg_.header.frame_id = CONFIG_world_frame;
     nav_goal_msg_.pose.position.x = x;
     nav_goal_msg_.pose.position.y = y;
+    nav_goal_msg_.pose.position.z = 0.0;
+    nav_goal_msg_.pose.orientation.x = 0.0;
+    nav_goal_msg_.pose.orientation.y = 0.0;
     nav_goal_msg_.pose.orientation.w = cos(0.5 * theta);
     nav_goal_msg_.pose.orientation.z = sin(0.5 * theta);
     PUBLISH(nav_goal_pub_, nav_goal_msg_);
