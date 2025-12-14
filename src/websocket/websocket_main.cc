@@ -37,8 +37,8 @@
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
 #include "amrl_msgs/msg/nav_status_msg.hpp"
 using amrl_msgs::msg::Localization2DMsg;
-using amrl_msgs::msg::VisualizationMsg;
 using amrl_msgs::msg::NavStatusMsg;
+using amrl_msgs::msg::VisualizationMsg;
 using geometry_msgs::msg::PoseStamped;
 using geometry_msgs::msg::PoseWithCovarianceStamped;
 using sensor_msgs::msg::LaserScan;
@@ -52,8 +52,8 @@ using std_msgs::msg::Empty;
 #include "amrl_msgs/Localization2DMsg.h"
 #include "amrl_msgs/NavStatusMsg.h"
 using amrl_msgs::Localization2DMsg;
-using amrl_msgs::VisualizationMsg;
 using amrl_msgs::NavStatusMsg;
+using amrl_msgs::VisualizationMsg;
 using geometry_msgs::PoseStamped;
 using geometry_msgs::PoseWithCovarianceStamped;
 using sensor_msgs::LaserScan;
@@ -133,9 +133,12 @@ bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
 
 // Default pose uncertainties (expressed as variances)
-constexpr double kInitPoseVarianceXY = 0.25;                      // (0.5 m)^2
-constexpr double kInitPoseVarianceTheta =
-    math_util::DegToRad(10.0) * math_util::DegToRad(10.0);        // (10 deg)^2
+constexpr double kInitPoseVarianceXY = 0.25;  // (0.5 m)^2
+constexpr double kInitPoseVarianceZ = 0.09;   // (0.3 m)^2
+constexpr double kInitPoseVarianceYaw =
+    math_util::DegToRad(30.0) * math_util::DegToRad(30.0);  // (30 deg)^2
+constexpr double kInitPoseVariancePitchRoll =
+    math_util::DegToRad(15.0) * math_util::DegToRad(15.0);  // (15 deg)^2
 
 // Track current subscriptions for dynamic reconfiguration
 #ifdef ROS2
@@ -319,9 +322,12 @@ void SetInitialPose(float x, float y, float theta, QString map) {
     initial_pose_msg_.pose.pose.orientation.z = sin(0.5 * theta);
     auto &cov = initial_pose_msg_.pose.covariance;
     std::fill(cov.begin(), cov.end(), 0.0);
-    cov[0] = kInitPoseVarianceXY;
-    cov[7] = kInitPoseVarianceXY;
-    cov[35] = kInitPoseVarianceTheta;
+    cov[0] = kInitPoseVarianceXY;          // x variance
+    cov[7] = kInitPoseVarianceXY;          // y variance
+    cov[14] = kInitPoseVarianceZ;          // z variance
+    cov[21] = kInitPoseVariancePitchRoll;  // roll variance
+    cov[28] = kInitPoseVariancePitchRoll;  // pitch variance
+    cov[35] = kInitPoseVarianceYaw;        // yaw variance
     PUBLISH(init_loc_pub_, initial_pose_msg_);
     amrl_initial_pose_msg_.header.stamp = GET_TIME();
     amrl_initial_pose_msg_.map = map.toStdString();
