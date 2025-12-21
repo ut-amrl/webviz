@@ -14,10 +14,11 @@ websocket = {
 ros_topics = {
   -- Input topics (subscribers)
   laser_scan = "/scan";
-  visualization = "/visualization"; 
+  visualization = "/visualization";
+  visualization_local = "/visualization_local";
   localization = "/localization";
   nav_status = "/navigation_goal_status";
-  
+
   -- Output topics (publishers)
   initial_pose_std = "/initialpose";           -- Standard ROS nav stack
   nav_goal_std = "/move_base_simple/goal";     -- Standard ROS nav stack
@@ -46,7 +47,6 @@ frames = {
 
 -- Data Processing Configuration
 data_processing = {
-  laser_range_scale = 1000.0;      -- Convert meters to millimeters for transmission
   protocol_nonce = 42;             -- Binary protocol identifier
   text_buffer_size = 32;           -- Max characters for text annotations
   map_name_buffer_size = 32;       -- Max characters for map names
