@@ -532,6 +532,18 @@
         }
       }
 
+      // Send map change notification.
+      changeMap(mapName) {
+        if (!this.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        this.socket.send(JSON.stringify({
+          type: "change_map",
+          map: mapName
+        }));
+      }
+
       close() {
         if (!this.socket) return;
         this.socket.close();
@@ -542,6 +554,9 @@
     function changeMap() {
       currentMapName = mapList.value;
       loadMap(currentMapName);
+      if (robot_interface) {
+        robot_interface.changeMap(currentMapName);
+      }
     }
 
     function loadMap(mapName) {

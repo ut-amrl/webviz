@@ -33,6 +33,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "amrl_msgs/msg/visualization_msg.hpp"
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
@@ -52,10 +53,12 @@ using geometry_msgs::msg::PoseStamped;
 using geometry_msgs::msg::PoseWithCovarianceStamped;
 using sensor_msgs::msg::LaserScan;
 using std_msgs::msg::Empty;
+using std_msgs::msg::String;
 #else
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseWithCovarianceStamped.h"
 #include "std_msgs/Empty.h"
+#include "std_msgs/String.h"
 #include "sensor_msgs/LaserScan.h"
 #include "amrl_msgs/VisualizationMsg.h"
 #include "amrl_msgs/Localization2DMsg.h"
@@ -68,6 +71,7 @@ using geometry_msgs::PoseStamped;
 using geometry_msgs::PoseWithCovarianceStamped;
 using sensor_msgs::LaserScan;
 using std_msgs::Empty;
+using std_msgs::String;
 #endif
 
 #include "gflags/gflags.h"
@@ -108,6 +112,8 @@ CONFIG_STRING(nav_goal_std_topic, "ros_topics.nav_goal_std");
 CONFIG_STRING(init_pose_amrl_topic, "ros_topics.initial_pose_amrl");
 CONFIG_STRING(nav_goal_amrl_topic, "ros_topics.nav_goal_amrl");
 CONFIG_STRING(reset_goals_topic, "ros_topics.reset_nav_goals");
+CONFIG_STRING(current_map_topic, "ros_topics.current_map");
+CONFIG_DOUBLE(current_map_publish_rate_hz, "websocket.current_map_publish_rate_hz");
 
 CONFIG_STRING(robot_frame, "frames.robot_frame");
 CONFIG_STRING(world_frame, "frames.world_frame");
@@ -130,6 +136,8 @@ PoseStamped nav_goal_msg_;
 Localization2DMsg amrl_initial_pose_msg_;
 Localization2DMsg amrl_nav_goal_msg_;
 Empty reset_nav_goals_msg_;
+String current_map_msg_;
+std::string current_map_name_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
 NavStatusMsg nav_status_msg_;
@@ -139,6 +147,7 @@ PublisherPtr<Localization2DMsg> amrl_init_loc_pub_;
 PublisherPtr<PoseStamped> nav_goal_pub_;
 PublisherPtr<Localization2DMsg> amrl_nav_goal_pub_;
 PublisherPtr<Empty> reset_nav_goals_pub_;
+PublisherPtr<std_msgs::msg::String> current_map_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
 
@@ -551,6 +560,24 @@ void SetNavGoal(float x, float y, float theta, QString map) {
     PUBLISH(amrl_nav_goal_pub_, amrl_nav_goal_msg_);
 }
 
+void ChangeMap(QString map) {
+    if (FLAGS_v > 0) {
+        printf("Change map: %s\n", map.toStdString().c_str());
+    }
+    // Store the current map name for continuous publishing
+    current_map_name_ = map.toStdString();
+    // Publish the current map name so other nodes can subscribe to map changes
+    current_map_msg_.data = current_map_name_;
+    PUBLISH(current_map_pub_, current_map_msg_);
+}
+
+void PublishCurrentMap() {
+    if (!current_map_name_.empty() && current_map_pub_) {
+        current_map_msg_.data = current_map_name_;
+        PUBLISH(current_map_pub_, current_map_msg_);
+    }
+}
+
 // Function to create or recreate ROS subscriptions
 void CreateSubscriptions() {
     if (FLAGS_v > 0) {
@@ -609,6 +636,7 @@ void CreatePublishers() {
         printf("  Initial pose (AMRL): %s\n", CONFIG_init_pose_amrl_topic.c_str());
         printf("  Nav goal (AMRL): %s\n", CONFIG_nav_goal_amrl_topic.c_str());
         printf("  Reset goals: %s\n", CONFIG_reset_goals_topic.c_str());
+        printf("  Current map: %s\n", CONFIG_current_map_topic.c_str());
     }
 
     init_loc_pub_ = CREATE_PUBLISHER(node_, PoseWithCovarianceStamped, CONFIG_init_pose_std_topic, CONFIG_pub_queue_size);
@@ -616,6 +644,7 @@ void CreatePublishers() {
     amrl_init_loc_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_init_pose_amrl_topic, CONFIG_pub_queue_size);
     amrl_nav_goal_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_nav_goal_amrl_topic, CONFIG_pub_queue_size);
     reset_nav_goals_pub_ = CREATE_PUBLISHER(node_, Empty, CONFIG_reset_goals_topic, CONFIG_pub_queue_size);
+    current_map_pub_ = CREATE_PUBLISHER(node_, String, CONFIG_current_map_topic, CONFIG_pub_queue_size);
 }
 
 // Function to capture current configuration state
@@ -783,6 +812,8 @@ void *RosThread(void *arg) {
     QObject::connect(
         server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
     QObject::connect(
+        server_, &RobotWebSocket::ChangeMapSignal, &ChangeMap);
+    QObject::connect(
         server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
 
     node_ = CREATE_NODE(CONFIG_ros_node_name);
@@ -872,6 +903,14 @@ int main(int argc, char *argv[]) {
         }
     });
     exitTimer.start(CONFIG_exit_check_interval_ms);  // Check based on config
+
+    // Setup timer for continuous current map publishing
+    QTimer mapPublishTimer;
+    QObject::connect(&mapPublishTimer, &QTimer::timeout, []() {
+        PublishCurrentMap();
+    });
+    const int map_publish_interval_ms = static_cast<int>(1000.0 / CONFIG_current_map_publish_rate_hz);
+    mapPublishTimer.start(map_publish_interval_ms);
 
     pthread_t ros_thread;
     pthread_create(&ros_thread, NULL, &RosThread, NULL);

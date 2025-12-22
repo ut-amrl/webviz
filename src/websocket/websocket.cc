@@ -192,7 +192,7 @@ DataMessage DataMessage::FromRosMessages(
     static const bool kDebug = false;
     DataMessage msg;
     for (size_t i = 0; i < sizeof(msg.header.map); ++i) {
-    msg.header.map[i] = 0;
+        msg.header.map[i] = 0;
     }
     msg.header.loc_x = localization_msg.pose.x;
     msg.header.loc_y = localization_msg.pose.y;
@@ -335,6 +335,12 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
                          json.value("y").toDouble(),
                          json.value("theta").toDouble(),
                          json.value("map").toString());
+    } else if (type == "change_map") {
+        if (!StringKeyPresent("map", json)) {
+            SendError("Invalid change_map parameters");
+            return;
+        }
+        ChangeMapSignal(json.value("map").toString());
     } else if (type == "reset_nav_goals") {
         ResetNavGoalsSignal();
     } else {

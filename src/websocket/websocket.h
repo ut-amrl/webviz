@@ -124,6 +124,7 @@ class RobotWebSocket : public QObject {
     void SendDataSignal();
     void SetInitialPoseSignal(float x, float y, float theta, QString map);
     void SetNavGoalSignal(float x, float y, float theta, QString map);
+    void ChangeMapSignal(QString map);
     void ResetNavGoalsSignal();
     void NavStatusSignal(uint8_t status);
 
