@@ -26,7 +26,7 @@ if(${ROS_VERSION} EQUAL "1")
       set(CMAKE_INCLUDE_CURRENT_DIR ON)
   endif()
 
-  SET(CMAKE_CXX_FLAGS "-std=c++11 -march=native -Werror -Wall -g")
+  SET(CMAKE_CXX_FLAGS "-std=c++14 -march=native -Werror -Wall -g")
 
   IF(${CMAKE_BUILD_TYPE} MATCHES "Release")
     MESSAGE(STATUS "Additional Flags for Release mode")

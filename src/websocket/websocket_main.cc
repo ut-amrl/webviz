@@ -147,7 +147,7 @@ PublisherPtr<Localization2DMsg> amrl_init_loc_pub_;
 PublisherPtr<PoseStamped> nav_goal_pub_;
 PublisherPtr<Localization2DMsg> amrl_nav_goal_pub_;
 PublisherPtr<Empty> reset_nav_goals_pub_;
-PublisherPtr<std_msgs::msg::String> current_map_pub_;
+PublisherPtr<String> current_map_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
 
