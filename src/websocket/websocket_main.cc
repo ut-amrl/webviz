@@ -819,6 +819,7 @@ void *RosThread(void *arg) {
     node_ = CREATE_NODE(CONFIG_ros_node_name);
 
 #ifdef ROS2
+    SET_ROS_CLOCK(node_);  // Enable sim time support for GET_TIME()
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
     tf_listener_ =
         std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
