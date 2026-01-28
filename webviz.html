@@ -882,6 +882,15 @@
       console.log(json);
       if (json.type === "nav_status" && json.status !== undefined) {
         navStatus = json.status;
+      } else if (json.type === "dynamic_nav_graph") {
+        navGraph = {
+          nodes: json.nodes.map((n, i) => ({id: i, loc: {x: n.x, y: n.y}})),
+          edges: json.edges.map((e, i) => ({edge_id: i, points: e.points}))
+        };
+        navNodesById = {};
+        for (let i = 0; i < navGraph.nodes.length; i++) {
+          navNodesById[navGraph.nodes[i].id] = {x: navGraph.nodes[i].loc.x, y: navGraph.nodes[i].loc.y};
+        }
       }
     }
 
@@ -963,22 +972,29 @@
       });
     }
 
-    // Draw navigation graph (edges + nodes) in orange
+    // Draw navigation graph (edges only) in orange
     function drawNavGraph() {
       if (!navGraph) return;
       const edgeColor = "#FFA500"; // orange
-      // Draw edges
       if (Array.isArray(navGraph.edges)) {
         for (let i = 0; i < navGraph.edges.length; i++) {
           const e = navGraph.edges[i];
-          const p0 = navNodesById[e.s0_id];
-          const p1 = navNodesById[e.s1_id];
-          if (p0 && p1) {
-            drawLine(edgeColor, p0.x, p0.y, p1.x, p1.y);
+          if (e.points && e.points.length > 1) {
+            // Dynamic graph with polylines
+            for (let j = 0; j < e.points.length - 1; j++) {
+              drawLine(edgeColor, e.points[j].x, e.points[j].y, 
+                       e.points[j+1].x, e.points[j+1].y);
+            }
+          } else if (e.s0_id !== undefined && e.s1_id !== undefined) {
+            // Static graph with node pairs
+            const p0 = navNodesById[e.s0_id];
+            const p1 = navNodesById[e.s1_id];
+            if (p0 && p1) {
+              drawLine(edgeColor, p0.x, p0.y, p1.x, p1.y);
+            }
           }
         }
       }
-      // Nodes not drawn; edges are sufficient for visualization
     }
 
     function drawPose(p, color) {

@@ -123,6 +123,8 @@ void RobotWebSocket::onNewConnection() {
             this, &RobotWebSocket::SendDataSlot);
     connect(this, &RobotWebSocket::NavStatusSignal,
             this, &RobotWebSocket::NavStatusSlot);
+    connect(this, &RobotWebSocket::DynamicNavGraphSignal,
+            this, &RobotWebSocket::DynamicNavGraphSlot);
 
     clients_.push_back(socket);
 }
@@ -285,6 +287,17 @@ void RobotWebSocket::SendNavStatus(uint8_t status) {
 
 void RobotWebSocket::NavStatusSlot(uint8_t status) {
     SendNavStatus(status);
+}
+
+void RobotWebSocket::SendDynamicNavGraph(const QString& json) {
+    for (auto c : clients_) {
+        CHECK_NOTNULL(c);
+        c->sendTextMessage(json);
+    }
+}
+
+void RobotWebSocket::DynamicNavGraphSlot(QString json) {
+    SendDynamicNavGraph(json);
 }
 
 bool AllNumericalKeysPresent(const QStringList& expected,

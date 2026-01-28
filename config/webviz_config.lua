@@ -27,6 +27,7 @@ ros_topics = {
   nav_goal_amrl = "/set_nav_target";           -- AMRL format
   reset_nav_goals = "/reset_nav_goals";        -- Reset command
   current_map = "/current_map";                -- Current active map name
+  dynamic_nav_graph = "/voronoi_graph";        -- Dynamic navigation graph
 };
 
 -- ROS Node Configuration  

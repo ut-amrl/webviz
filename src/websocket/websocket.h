@@ -118,6 +118,7 @@ class RobotWebSocket : public QObject {
               const VisualizationMsg& global_vis,
               const Localization2DMsg& localization);
     void SendNavStatus(uint8_t status);
+    void SendDynamicNavGraph(const QString& json);
 
    Q_SIGNALS:
     void closed();
@@ -127,6 +128,7 @@ class RobotWebSocket : public QObject {
     void ChangeMapSignal(QString map);
     void ResetNavGoalsSignal();
     void NavStatusSignal(uint8_t status);
+    void DynamicNavGraphSignal(QString json);
 
    private Q_SLOTS:
     void onNewConnection();
@@ -135,6 +137,7 @@ class RobotWebSocket : public QObject {
     void socketDisconnected();
     void SendDataSlot();
     void NavStatusSlot(uint8_t status);
+    void DynamicNavGraphSlot(QString json);
 
    private:
     void ProcessCallback(const QJsonObject& json);

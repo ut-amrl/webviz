@@ -35,6 +35,7 @@
 #include "std_msgs/msg/empty.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 #include "amrl_msgs/msg/visualization_msg.hpp"
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
 #include "amrl_msgs/msg/nav_status_msg.hpp"
@@ -54,12 +55,14 @@ using geometry_msgs::msg::PoseWithCovarianceStamped;
 using sensor_msgs::msg::LaserScan;
 using std_msgs::msg::Empty;
 using std_msgs::msg::String;
+using visualization_msgs::msg::MarkerArray;
 #else
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseWithCovarianceStamped.h"
 #include "std_msgs/Empty.h"
 #include "std_msgs/String.h"
 #include "sensor_msgs/LaserScan.h"
+#include "visualization_msgs/MarkerArray.h"
 #include "amrl_msgs/VisualizationMsg.h"
 #include "amrl_msgs/Localization2DMsg.h"
 #include "amrl_msgs/NavStatusMsg.h"
@@ -72,6 +75,7 @@ using geometry_msgs::PoseWithCovarianceStamped;
 using sensor_msgs::LaserScan;
 using std_msgs::Empty;
 using std_msgs::String;
+using visualization_msgs::MarkerArray;
 #endif
 
 #include "gflags/gflags.h"
@@ -113,6 +117,7 @@ CONFIG_STRING(init_pose_amrl_topic, "ros_topics.initial_pose_amrl");
 CONFIG_STRING(nav_goal_amrl_topic, "ros_topics.nav_goal_amrl");
 CONFIG_STRING(reset_goals_topic, "ros_topics.reset_nav_goals");
 CONFIG_STRING(current_map_topic, "ros_topics.current_map");
+CONFIG_STRING(dynamic_nav_graph_topic, "ros_topics.dynamic_nav_graph");
 CONFIG_DOUBLE(current_map_publish_rate_hz, "websocket.current_map_publish_rate_hz");
 
 CONFIG_STRING(robot_frame, "frames.robot_frame");
@@ -141,6 +146,7 @@ std::string current_map_name_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
 NavStatusMsg nav_status_msg_;
+MarkerArray dynamic_nav_graph_;
 NodePtr node_;
 PublisherPtr<PoseWithCovarianceStamped> init_loc_pub_;
 PublisherPtr<Localization2DMsg> amrl_init_loc_pub_;
@@ -166,12 +172,14 @@ SubscriberPtr<VisualizationMsg> vis_sub_;
 SubscriberPtr<VisualizationMsg> vis_local_sub_;
 SubscriberPtr<Localization2DMsg> localization_sub_;
 SubscriberPtr<NavStatusMsg> nav_status_sub_;
+SubscriberPtr<MarkerArray> dynamic_nav_graph_sub_;
 #else
 SubscriberPtr<LaserScan> laser_sub_;
 SubscriberPtr<VisualizationMsg> vis_sub_;
 SubscriberPtr<VisualizationMsg> vis_local_sub_;
 SubscriberPtr<Localization2DMsg> localization_sub_;
 SubscriberPtr<NavStatusMsg> nav_status_sub_;
+SubscriberPtr<MarkerArray> dynamic_nav_graph_sub_;
 #endif
 
 // Track current topic names to detect changes
@@ -232,6 +240,37 @@ void NavStatusCallback(const NavStatusMsg &msg) {
     nav_status_msg_ = msg;
     if (server_ != nullptr) {
         Q_EMIT server_->NavStatusSignal(msg.status);
+    }
+}
+
+void DynamicNavGraphCallback(const MarkerArray &msg) {
+    dynamic_nav_graph_ = msg;
+    if (server_ != nullptr) {
+        QString json = "{ \"type\": \"dynamic_nav_graph\", \"nodes\": [";
+        bool first_node = true;
+        for (const auto& marker : msg.markers) {
+            if (marker.ns == "gvd_nodes") {
+                if (!first_node) json += ", ";
+                json += QString("{\"x\": %1, \"y\": %2}").arg(marker.pose.position.x).arg(marker.pose.position.y);
+                first_node = false;
+            }
+        }
+        json += "], \"edges\": [";
+        bool first_edge = true;
+        for (const auto& marker : msg.markers) {
+            if (marker.ns == "gvd_edges" && marker.type == 4) {
+                if (!first_edge) json += ", ";
+                json += "{\"points\": [";
+                for (size_t i = 0; i < marker.points.size(); ++i) {
+                    if (i > 0) json += ", ";
+                    json += QString("{\"x\": %1, \"y\": %2}").arg(marker.points[i].x).arg(marker.points[i].y);
+                }
+                json += "]}";
+                first_edge = false;
+            }
+        }
+        json += "]}";
+        Q_EMIT server_->DynamicNavGraphSignal(json);
     }
 }
 
@@ -606,18 +645,23 @@ void CreateSubscriptions() {
     auto nav_status_callback = [](const NavStatusMsg::SharedPtr msg) {
         NavStatusCallback(*msg);
     };
+    auto dynamic_nav_graph_callback = [](const MarkerArray::SharedPtr msg) {
+        DynamicNavGraphCallback(*msg);
+    };
 
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
     vis_local_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_local_topic, CONFIG_viz_queue_size, vis_local_callback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
     nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, CONFIG_nav_status_queue_size, nav_status_callback);
+    dynamic_nav_graph_sub_ = CREATE_SUBSCRIBER(node_, MarkerArray, CONFIG_dynamic_nav_graph_topic, 10, dynamic_nav_graph_callback);
 #else
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
     vis_local_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_local_topic, CONFIG_viz_queue_size, &VisualizationCallback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
     nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, CONFIG_nav_status_queue_size, &NavStatusCallback);
+    dynamic_nav_graph_sub_ = CREATE_SUBSCRIBER(node_, MarkerArray, CONFIG_dynamic_nav_graph_topic, 10, &DynamicNavGraphCallback);
 #endif
 
     // Update tracked topic names
@@ -734,11 +778,13 @@ bool CheckAndUpdateConfiguration() {
             vis_sub_.reset();
             vis_local_sub_.reset();
             localization_sub_.reset();
+            dynamic_nav_graph_sub_.reset();
 #else
             laser_sub_.shutdown();
             vis_sub_.shutdown();
             vis_local_sub_.shutdown();
             localization_sub_.shutdown();
+            dynamic_nav_graph_sub_.shutdown();
 #endif
             CreateSubscriptions();
         }
