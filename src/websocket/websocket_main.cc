@@ -654,7 +654,10 @@ void CreateSubscriptions() {
     vis_local_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_local_topic, CONFIG_viz_queue_size, vis_local_callback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
     nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, CONFIG_nav_status_queue_size, nav_status_callback);
-    dynamic_nav_graph_sub_ = CREATE_SUBSCRIBER(node_, MarkerArray, CONFIG_dynamic_nav_graph_topic, 10, dynamic_nav_graph_callback);
+    
+    auto graph_qos = rclcpp::QoS(10).reliable().transient_local();
+    dynamic_nav_graph_sub_ = node_->create_subscription<MarkerArray>(
+        CONFIG_dynamic_nav_graph_topic, graph_qos, dynamic_nav_graph_callback);
 #else
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
