@@ -13,7 +13,10 @@
 #define LOG_ERROR(...) RCLCPP_ERROR(WEBVIZ_LOGGER, __VA_ARGS__)
 #define LOG_WARN(...) RCLCPP_WARN(WEBVIZ_LOGGER, __VA_ARGS__)
 #define LOG_INFO(...) RCLCPP_INFO(WEBVIZ_LOGGER, __VA_ARGS__)
-#define GET_TIME() rclcpp::Clock().now()
+// Global clock pointer for sim time support (set via SET_ROS_CLOCK after node creation)
+inline rclcpp::Clock::SharedPtr g_ros_clock_ = nullptr;
+#define SET_ROS_CLOCK(node) g_ros_clock_ = node->get_clock()
+#define GET_TIME() (g_ros_clock_ ? g_ros_clock_->now() : rclcpp::Clock().now())
 #define DURATION(secs) rclcpp::Duration::from_seconds(secs)
 
 // Node abstractions

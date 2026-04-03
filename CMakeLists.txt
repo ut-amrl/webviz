@@ -26,7 +26,7 @@ if(${ROS_VERSION} EQUAL "1")
       set(CMAKE_INCLUDE_CURRENT_DIR ON)
   endif()
 
-  SET(CMAKE_CXX_FLAGS "-std=c++11 -march=native -Werror -Wall -g")
+  SET(CMAKE_CXX_FLAGS "-std=c++14 -march=native -Werror -Wall -g")
 
   IF(${CMAKE_BUILD_TYPE} MATCHES "Release")
     MESSAGE(STATUS "Additional Flags for Release mode")
@@ -97,6 +97,11 @@ elseif(${ROS_VERSION} EQUAL "2")
   find_package(geometry_msgs REQUIRED)
   find_package(sensor_msgs REQUIRED)
   find_package(nav_msgs REQUIRED)
+  find_package(visualization_msgs REQUIRED)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_ros REQUIRED)
+# tf2_geometry_msgs header name differs across distros
+  find_package(tf2_geometry_msgs REQUIRED)
   
   # Convert AMENT_PREFIX_PATH to CMAKE_PREFIX_PATH (standard ROS2 pattern)
   if(DEFINED ENV{AMENT_PREFIX_PATH})
@@ -148,6 +153,10 @@ elseif(${ROS_VERSION} EQUAL "2")
     geometry_msgs
     sensor_msgs
     nav_msgs
+    visualization_msgs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
     amrl_msgs
   )
   

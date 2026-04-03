@@ -81,6 +81,7 @@
     <option value="GDC3">GDC3</option>
     <option value="AHG1">AHG1</option>
     <option value="AHG2">AHG2</option>
+    <option value="LabApt">LabApt</option>
     <option value="ICRA2022_F1Tenth_Track">ICRA2022_F1Tenth_Track</option>
     <option value="AHG2_Track">AHG2_Track</option>
     <option value="Slalom_Course">Slalom_Course</option>
@@ -100,10 +101,6 @@
       <tr>
         <td>WebSocket Port:</td>
         <td><input type="number" id="port" value="10272" min="1" max="65535" size="6"></td>
-      </tr>
-      <tr>
-        <td>Laser Offset X (m):</td>
-        <td><input type="number" id="laserOffsetX" value="0.2" step="0.01" size="6"></td>
       </tr>
       <tr>
         <td>Update Rate (Hz):</td>
@@ -151,7 +148,9 @@
     var robotPose = undefined;
     var tLastDraw = 0;
     var map = [];
-    var lastLaserScan = undefined;
+    // Navigation graph for current map
+    var navGraph = null;       // { nodes: [...], edges: [...] }
+    var navNodesById = {};     // id -> {x, y}
     var robot_interface = undefined;
     var currentMapName = '';
     var navStatus = undefined;
@@ -166,10 +165,6 @@
       if (window.localStorage.getItem('port')) {
         document.getElementById('port').value =
           window.localStorage.getItem('port');
-      }
-      if (window.localStorage.getItem('laserOffsetX')) {
-        document.getElementById('laserOffsetX').value =
-          window.localStorage.getItem('laserOffsetX');
       }
       if (window.localStorage.getItem('updateRate')) {
         document.getElementById('updateRate').value =
@@ -207,13 +202,10 @@
           num_lines: 0,
           num_arcs: 0,
           num_text_annotations: 0,
-          num_laser_rays: 0,
           num_local_points: 0,
           num_local_lines: 0,
           num_local_arcs: 0,
           num_local_text_annotations: 0,
-          laser_min_angle: 0,
-          laser_max_angle: 0,
           robot_pose: { x: NaN, y: NaN, theta: NaN },
           map: ''
         };
@@ -279,13 +271,10 @@
         this.header.num_lines = this.readUint32();
         this.header.num_arcs = this.readUint32();
         this.header.num_text_annotations = this.readUint32();
-        this.header.num_laser_rays = this.readUint32();
         this.header.num_local_points = this.readUint32();
         this.header.num_local_lines = this.readUint32();
         this.header.num_local_arcs = this.readUint32();
         this.header.num_local_text_annotations = this.readUint32();
-        this.header.laser_min_angle = this.readFloat32();
-        this.header.laser_max_angle = this.readFloat32();
         this.header.robot_pose = this.readPose();
         this.header.map = this.readString();
         return this.header;
@@ -309,18 +298,6 @@
           arr.push(reader());
         }
         return arr;
-      }
-
-      readLaser() {
-        let laser = {
-          angle_min: this.header.laser_min_angle,
-          angle_max: this.header.laser_max_angle,
-          ranges: this.readMultiple(this.header.num_laser_rays, () => this.readUint32())
-        }
-        for (let i = 0; i < laser.ranges.length; ++i) {
-          laser.ranges[i] = 0.001 * laser.ranges[i];
-        }
-        return laser;
       }
 
       readColor() {
@@ -381,7 +358,6 @@
       readMessage() {
         let message = {
           header: this.readHeader(),
-          laser: this.readLaser(),
           points: this.readMultiple(this.header.num_points, () => this.readPoint()),
           lines: this.readMultiple(this.header.num_lines, () => this.readLine()),
           arcs: this.readMultiple(this.header.num_arcs, () => this.readArc()),
@@ -556,6 +532,18 @@
         }
       }
 
+      // Send map change notification.
+      changeMap(mapName) {
+        if (!this.socket) {
+          console.error('Error: not connected');
+          return;
+        }
+        this.socket.send(JSON.stringify({
+          type: "change_map",
+          map: mapName
+        }));
+      }
+
       close() {
         if (!this.socket) return;
         this.socket.close();
@@ -566,9 +554,15 @@
     function changeMap() {
       currentMapName = mapList.value;
       loadMap(currentMapName);
+      if (robot_interface) {
+        robot_interface.changeMap(currentMapName);
+      }
     }
 
     function loadMap(mapName) {
+      // Reset nav graph for new map
+      navGraph = null;
+      navNodesById = {};
       let found = false;
       for (var opt, j = 0; opt = mapList.options[j]; j++) {
         if (opt.value == mapName) {
@@ -609,6 +603,39 @@
       };
       xhr.open('GET', url, true);
       xhr.send();
+
+      // Load navigation graph (nodes/edges) from the same repo/branch
+      let navUrl = `https://raw.githubusercontent.com/ut-amrl/amrl_maps/${branchName}/${mapName}/${mapName}.navigation.json`;
+      console.log(`Loading "${navUrl}"`);
+      var navXhr = new XMLHttpRequest();
+      navXhr.onload = function () {
+        var status = navXhr.status;
+        if (status === 200) {
+          try {
+            navGraph = JSON.parse(navXhr.response);
+            // Build quick lookup for node id -> location
+            navNodesById = {};
+            if (navGraph && Array.isArray(navGraph.nodes)) {
+              for (let i = 0; i < navGraph.nodes.length; i++) {
+                const n = navGraph.nodes[i];
+                if (n && n.id !== undefined && n.loc) {
+                  navNodesById[n.id] = { x: n.loc.x, y: n.loc.y };
+                }
+              }
+            }
+          } catch (e) {
+            console.error(`Error parsing navigation: ${e}`);
+            navGraph = null;
+            navNodesById = {};
+            return;
+          }
+          console.log(`Loaded navigation for "${mapName}"`);
+        } else {
+          console.log(`Error loading navigation for "${mapName}"`);
+        }
+      };
+      navXhr.open('GET', navUrl, true);
+      navXhr.send();
     }
 
     function setLocationButton() {
@@ -841,7 +868,6 @@
 
     function receiveData(d) {
       visMsg = d;
-      lastLaserScan = d.laser;
       robotPose = d.robotPose;
       if (robotPose !== undefined) {
         const x_str = robotPose.x.toFixed(3);
@@ -856,6 +882,15 @@
       console.log(json);
       if (json.type === "nav_status" && json.status !== undefined) {
         navStatus = json.status;
+      } else if (json.type === "dynamic_nav_graph") {
+        navGraph = {
+          nodes: json.nodes.map((n, i) => ({id: i, loc: {x: n.x, y: n.y}})),
+          edges: json.edges.map((e, i) => ({edge_id: i, points: e.points}))
+        };
+        navNodesById = {};
+        for (let i = 0; i < navGraph.nodes.length; i++) {
+          navNodesById[navGraph.nodes[i].id] = {x: navGraph.nodes[i].loc.x, y: navGraph.nodes[i].loc.y};
+        }
       }
     }
 
@@ -872,7 +907,6 @@
       try {
         window.localStorage.setItem('ipaddr', ipaddr);
         window.localStorage.setItem('port', port);
-        window.localStorage.setItem('laserOffsetX', document.getElementById('laserOffsetX').value);
         window.localStorage.setItem('updateRate', document.getElementById('updateRate').value);
         window.localStorage.setItem('waypointPause', document.getElementById('waypointPause').value);
         window.localStorage.setItem('navGoalSize', document.getElementById('navGoalSize').value);
@@ -938,6 +972,31 @@
       });
     }
 
+    // Draw navigation graph (edges only) in orange
+    function drawNavGraph() {
+      if (!navGraph) return;
+      const edgeColor = "#FFA500"; // orange
+      if (Array.isArray(navGraph.edges)) {
+        for (let i = 0; i < navGraph.edges.length; i++) {
+          const e = navGraph.edges[i];
+          if (e.points && e.points.length > 1) {
+            // Dynamic graph with polylines
+            for (let j = 0; j < e.points.length - 1; j++) {
+              drawLine(edgeColor, e.points[j].x, e.points[j].y, 
+                       e.points[j+1].x, e.points[j+1].y);
+            }
+          } else if (e.s0_id !== undefined && e.s1_id !== undefined) {
+            // Static graph with node pairs
+            const p0 = navNodesById[e.s0_id];
+            const p1 = navNodesById[e.s1_id];
+            if (p0 && p1) {
+              drawLine(edgeColor, p0.x, p0.y, p1.x, p1.y);
+            }
+          }
+        }
+      }
+    }
+
     function drawPose(p, color) {
       const l = 0.5;
       const h = 0.1;
@@ -974,9 +1033,9 @@
       }
       drawGrid();
       drawMap();
+      drawNavGraph();
       drawNavGoal();
       drawWaypoints();
-      drawLaserScan();
       drawPoints();
       drawLines();
       drawArcs();
@@ -998,51 +1057,22 @@
     function drawPoints() {
       if (visMsg === undefined) return;
       visMsg.points.forEach(function (p, i) {
-        let point = p.point;
-        if (i < visMsg.header.num_local_points) {
-          point = robotToMap(point);
-        }
-        drawPoint(p.color, point.x, point.y);
+        drawPoint(p.color, p.point.x, p.point.y);
       });
-    }
-
-    function robotToMap(p) {
-      if (visMsg === undefined ||
-        visMsg.header === undefined ||
-        visMsg.header.robot_pose === undefined) {
-        return p;
-      }
-      let a = visMsg.header.robot_pose.theta;
-      let c = Math.cos(a);
-      let s = Math.sin(a);
-      return {
-        x: c * p.x - s * p.y + visMsg.header.robot_pose.x,
-        y: s * p.x + c * p.y + visMsg.header.robot_pose.y
-      };
     }
 
     function drawLines() {
       if (visMsg === undefined) return;
       // console.log(visMsg.lines);
       visMsg.lines.forEach(function (l, i) {
-        let p0 = l.p0;
-        let p1 = l.p1;
-        if (i < visMsg.header.num_local_lines) {
-          p0 = robotToMap(p0);
-          p1 = robotToMap(p1);
-        }
-        drawLine(l.color, p0.x, p0.y, p1.x, p1.y);
+        drawLine(l.color, l.p0.x, l.p0.y, l.p1.x, l.p1.y);
       });
     }
 
     function drawTextAnnotations() {
       if (visMsg == undefined) return;
       visMsg.textAnnotations.forEach(function (m, i) {
-        let p = m.start;
-        if (i < visMsg.header.num_local_text_annotations) {
-          p = robotToMap(p);
-        }
-        drawTextAnnotation(m.str, p.x, p.y, m.color, m.size_em);
+        drawTextAnnotation(m.str, m.start.x, m.start.y, m.color, m.size_em);
       });
     }
 
@@ -1050,15 +1080,7 @@
       if (visMsg === undefined) return;
       // console.log(visMsg.arcs);
       visMsg.arcs.forEach(function (a, i) {
-        let center = a.center;
-        let theta0 = a.start_angle;
-        let theta1 = a.end_angle;
-        if (i < visMsg.header.num_local_arcs) {
-          center = robotToMap(center);
-          theta0 += visMsg.header.robot_pose.theta;
-          theta1 += visMsg.header.robot_pose.theta;
-        }
-        drawArc(a.color, center.x, center.y, a.radius, theta0, theta1);
+        drawArc(a.color, a.center.x, a.center.y, a.radius, a.start_angle, a.end_angle);
       });
     }
 
@@ -1160,33 +1182,6 @@
           c = `rgb(${m.colors[i].r * 255},${m.colors[i].g * 255},${m.colors[i].b * 255})`;
         }
         drawLine(c, p0.x, p0.y, p1.x, p1.y);
-      }
-    }
-
-    function drawLaserScan() {
-      if (!lastLaserScan) return;
-      let offset = { x: 0, y: 0, theta: 0 };
-      if (robotPose) {
-        // Configurable laser offset forward (X direction) on the robot
-        const laserOffsetX = parseFloat(document.getElementById('laserOffsetX').value) || 0.2;
-        offset = {
-          x: robotPose.x + laserOffsetX * Math.cos(robotPose.theta),
-          y: robotPose.y + laserOffsetX * Math.sin(robotPose.theta),
-          theta: robotPose.theta
-        };
-      }
-      // Update map and draw line being made.
-      // ctx.strokeStyle = 'rgba(82, 125, 232, 1)';
-      // ctx.lineWidth = 2;
-      const da = (lastLaserScan.angle_max - lastLaserScan.angle_min) /
-        lastLaserScan.ranges.length;
-      for (let i = 0; i < lastLaserScan.ranges.length; ++i) {
-        const r = lastLaserScan.ranges[i];
-        if (r === 0) continue;
-        const a = lastLaserScan.angle_min + i * da + offset.theta;
-        const x = Math.cos(a) * r + offset.x;
-        const y = Math.sin(a) * r + offset.y;
-        drawPoint("#eb8334", x, y);
       }
     }
 

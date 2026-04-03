@@ -26,38 +26,56 @@
 #include <atomic>
 #include <unistd.h>
 #include <cstdlib>
+#include <cmath>
 
 #ifdef ROS2
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 #include "amrl_msgs/msg/visualization_msg.hpp"
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
 #include "amrl_msgs/msg/nav_status_msg.hpp"
+#include <tf2/LinearMath/Transform.h>
+#if __has_include(<tf2_geometry_msgs/tf2_geometry_msgs.hpp>)
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#else
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#endif
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
 using amrl_msgs::msg::Localization2DMsg;
-using amrl_msgs::msg::VisualizationMsg;
 using amrl_msgs::msg::NavStatusMsg;
+using amrl_msgs::msg::VisualizationMsg;
 using geometry_msgs::msg::PoseStamped;
 using geometry_msgs::msg::PoseWithCovarianceStamped;
 using sensor_msgs::msg::LaserScan;
 using std_msgs::msg::Empty;
+using std_msgs::msg::String;
+using visualization_msgs::msg::MarkerArray;
 #else
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseWithCovarianceStamped.h"
 #include "std_msgs/Empty.h"
+#include "std_msgs/String.h"
 #include "sensor_msgs/LaserScan.h"
+#include "visualization_msgs/MarkerArray.h"
 #include "amrl_msgs/VisualizationMsg.h"
 #include "amrl_msgs/Localization2DMsg.h"
 #include "amrl_msgs/NavStatusMsg.h"
+#include <tf/transform_listener.h>
 using amrl_msgs::Localization2DMsg;
-using amrl_msgs::VisualizationMsg;
 using amrl_msgs::NavStatusMsg;
+using amrl_msgs::VisualizationMsg;
 using geometry_msgs::PoseStamped;
 using geometry_msgs::PoseWithCovarianceStamped;
 using sensor_msgs::LaserScan;
 using std_msgs::Empty;
+using std_msgs::String;
+using visualization_msgs::MarkerArray;
 #endif
 
 #include "gflags/gflags.h"
@@ -72,7 +90,7 @@ using std::vector;
 
 DEFINE_double(fps, 10.0, "Max visualization frames rate.");
 DEFINE_double(max_age, 2.0, "Maximum age of a message before it gets dropped.");
-DEFINE_string(config_file, "config/webviz_config.lua", "Name of config file to use");
+DEFINE_string(config_file, "", "Name of config file to use (required)");
 DECLARE_int32(v);
 
 // Configuration variables using config-reader macros
@@ -90,6 +108,7 @@ CONFIG_INT(pub_queue_size, "ros_node.queue_sizes.publishers");
 
 CONFIG_STRING(laser_topic, "ros_topics.laser_scan");
 CONFIG_STRING(viz_topic, "ros_topics.visualization");
+CONFIG_STRING(viz_local_topic, "ros_topics.visualization_local");
 CONFIG_STRING(loc_topic, "ros_topics.localization");
 CONFIG_STRING(nav_status_topic, "ros_topics.nav_status");
 CONFIG_STRING(init_pose_std_topic, "ros_topics.initial_pose_std");
@@ -97,11 +116,13 @@ CONFIG_STRING(nav_goal_std_topic, "ros_topics.nav_goal_std");
 CONFIG_STRING(init_pose_amrl_topic, "ros_topics.initial_pose_amrl");
 CONFIG_STRING(nav_goal_amrl_topic, "ros_topics.nav_goal_amrl");
 CONFIG_STRING(reset_goals_topic, "ros_topics.reset_nav_goals");
+CONFIG_STRING(current_map_topic, "ros_topics.current_map");
+CONFIG_STRING(dynamic_nav_graph_topic, "ros_topics.dynamic_nav_graph");
+CONFIG_DOUBLE(current_map_publish_rate_hz, "websocket.current_map_publish_rate_hz");
 
 CONFIG_STRING(robot_frame, "frames.robot_frame");
 CONFIG_STRING(world_frame, "frames.world_frame");
 
-CONFIG_DOUBLE(laser_range_scale, "data_processing.laser_range_scale");
 CONFIG_INT(protocol_nonce, "data_processing.protocol_nonce");
 CONFIG_INT(text_buffer_size, "data_processing.text_buffer_size");
 CONFIG_INT(map_name_buffer_size, "data_processing.map_name_buffer_size");
@@ -120,41 +141,69 @@ PoseStamped nav_goal_msg_;
 Localization2DMsg amrl_initial_pose_msg_;
 Localization2DMsg amrl_nav_goal_msg_;
 Empty reset_nav_goals_msg_;
+String current_map_msg_;
+std::string current_map_name_;
 Localization2DMsg localization_msg_;
 LaserScan laser_scan_;
 NavStatusMsg nav_status_msg_;
+MarkerArray dynamic_nav_graph_;
 NodePtr node_;
 PublisherPtr<PoseWithCovarianceStamped> init_loc_pub_;
 PublisherPtr<Localization2DMsg> amrl_init_loc_pub_;
 PublisherPtr<PoseStamped> nav_goal_pub_;
 PublisherPtr<Localization2DMsg> amrl_nav_goal_pub_;
 PublisherPtr<Empty> reset_nav_goals_pub_;
+PublisherPtr<String> current_map_pub_;
 bool updates_pending_ = false;
 RobotWebSocket *server_ = nullptr;
+
+// Default pose uncertainties (expressed as variances)
+constexpr double kInitPoseVarianceXY = 0.25;  // (0.5 m)^2
+constexpr double kInitPoseVarianceZ = 0.09;   // (0.3 m)^2
+constexpr double kInitPoseVarianceYaw =
+    math_util::DegToRad(30.0) * math_util::DegToRad(30.0);  // (30 deg)^2
+constexpr double kInitPoseVariancePitchRoll =
+    math_util::DegToRad(15.0) * math_util::DegToRad(15.0);  // (15 deg)^2
 
 // Track current subscriptions for dynamic reconfiguration
 #ifdef ROS2
 SubscriberPtr<LaserScan> laser_sub_;
 SubscriberPtr<VisualizationMsg> vis_sub_;
+SubscriberPtr<VisualizationMsg> vis_local_sub_;
 SubscriberPtr<Localization2DMsg> localization_sub_;
 SubscriberPtr<NavStatusMsg> nav_status_sub_;
+SubscriberPtr<MarkerArray> dynamic_nav_graph_sub_;
 #else
 SubscriberPtr<LaserScan> laser_sub_;
 SubscriberPtr<VisualizationMsg> vis_sub_;
+SubscriberPtr<VisualizationMsg> vis_local_sub_;
 SubscriberPtr<Localization2DMsg> localization_sub_;
 SubscriberPtr<NavStatusMsg> nav_status_sub_;
+SubscriberPtr<MarkerArray> dynamic_nav_graph_sub_;
 #endif
 
 // Track current topic names to detect changes
 std::string current_laser_topic_;
 std::string current_viz_topic_;
+std::string current_viz_local_topic_;
 std::string current_loc_topic_;
+
+// TF helpers
+#ifdef ROS2
+std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+#else
+std::unique_ptr<tf::TransformListener> tf_listener_;
+#endif
+
+constexpr uint32_t kLaserColor = 0x00eb8334;
 
 // Track current configuration for comprehensive monitoring
 struct CurrentConfig {
     // Subscriber topics
     std::string laser_topic;
     std::string viz_topic;
+    std::string viz_local_topic;
     std::string loc_topic;
 
     // Publisher topics
@@ -191,6 +240,37 @@ void NavStatusCallback(const NavStatusMsg &msg) {
     nav_status_msg_ = msg;
     if (server_ != nullptr) {
         Q_EMIT server_->NavStatusSignal(msg.status);
+    }
+}
+
+void DynamicNavGraphCallback(const MarkerArray &msg) {
+    dynamic_nav_graph_ = msg;
+    if (server_ != nullptr) {
+        QString json = "{ \"type\": \"dynamic_nav_graph\", \"nodes\": [";
+        bool first_node = true;
+        for (const auto& marker : msg.markers) {
+            if (marker.ns == "gvd_nodes") {
+                if (!first_node) json += ", ";
+                json += QString("{\"x\": %1, \"y\": %2}").arg(marker.pose.position.x).arg(marker.pose.position.y);
+                first_node = false;
+            }
+        }
+        json += "], \"edges\": [";
+        bool first_edge = true;
+        for (const auto& marker : msg.markers) {
+            if (marker.ns == "gvd_edges" && marker.type == 4) {
+                if (!first_edge) json += ", ";
+                json += "{\"points\": [";
+                for (size_t i = 0; i < marker.points.size(); ++i) {
+                    if (i > 0) json += ", ";
+                    json += QString("{\"x\": %1, \"y\": %2}").arg(marker.points[i].x).arg(marker.points[i].y);
+                }
+                json += "]}";
+                first_edge = false;
+            }
+        }
+        json += "]}";
+        Q_EMIT server_->DynamicNavGraphSignal(json);
     }
 }
 
@@ -241,6 +321,173 @@ void MergeMessage(const VisualizationMsg &m1,
     MergeVector(m1.text_annotations, &m2.text_annotations);
 }
 
+Point2D TransformPointToWorld(const Point2D &p,
+                              const Localization2DMsg &loc) {
+    const float c = std::cos(loc.pose.theta);
+    const float s = std::sin(loc.pose.theta);
+    Point2D out;
+    out.x = c * p.x - s * p.y + loc.pose.x;
+    out.y = s * p.x + c * p.y + loc.pose.y;
+    return out;
+}
+
+VisualizationMsg TransformRobotVisualizationToWorld(
+    const VisualizationMsg &msg,
+    const Localization2DMsg &loc) {
+    VisualizationMsg out = msg;
+    out.header.frame_id = CONFIG_world_frame;
+    out.points.clear();
+    out.lines.clear();
+    out.arcs.clear();
+    out.text_annotations.clear();
+
+    for (const auto &p : msg.points) {
+        ColoredPoint2D transformed = p;
+        transformed.point = TransformPointToWorld(p.point, loc);
+        out.points.push_back(transformed);
+    }
+    for (const auto &l : msg.lines) {
+        ColoredLine2D transformed = l;
+        transformed.p0 = TransformPointToWorld(l.p0, loc);
+        transformed.p1 = TransformPointToWorld(l.p1, loc);
+        out.lines.push_back(transformed);
+    }
+    for (const auto &a : msg.arcs) {
+        ColoredArc2D transformed = a;
+        transformed.center = TransformPointToWorld(a.center, loc);
+        transformed.start_angle = a.start_angle + loc.pose.theta;
+        transformed.end_angle = a.end_angle + loc.pose.theta;
+        out.arcs.push_back(transformed);
+    }
+    for (const auto &t : msg.text_annotations) {
+        ColoredText transformed = t;
+        transformed.start = TransformPointToWorld(t.start, loc);
+        out.text_annotations.push_back(transformed);
+    }
+    return out;
+}
+
+VisualizationMsg BuildWorldVisualization(
+    const std::vector<VisualizationMsg> &msgs,
+    const Localization2DMsg &loc) {
+    VisualizationMsg world_vis;
+    world_vis.header.frame_id = CONFIG_world_frame;
+    world_vis.header.stamp = GET_TIME();
+    for (const VisualizationMsg &m : msgs) {
+        if (m.header.frame_id == CONFIG_world_frame) {
+            MergeMessage(m, &world_vis);
+        } else if (m.header.frame_id == CONFIG_robot_frame) {
+            MergeMessage(TransformRobotVisualizationToWorld(m, loc), &world_vis);
+        } else {
+            LOG_WARN("Ignoring visualization for unknown frame '%s'.",
+                     m.header.frame_id.c_str());
+        }
+    }
+    return world_vis;
+}
+
+#ifdef ROS2
+bool LookupLaserToRobotTransform(const std::string &frame_id,
+                                 tf2::Transform *transform) {
+    if (tf_buffer_ == nullptr) return false;
+    try {
+        const geometry_msgs::msg::TransformStamped transform_stamped =
+            tf_buffer_->lookupTransform(CONFIG_robot_frame,
+                                        frame_id,
+                                        tf2::TimePointZero);
+        tf2::fromMsg(transform_stamped.transform, *transform);
+        return true;
+    } catch (const tf2::TransformException &ex) {
+        static bool warned = false;
+        if (!warned) {
+            LOG_WARN("Failed to lookup transform from '%s' to '%s': %s",
+                     frame_id.c_str(),
+                     CONFIG_robot_frame.c_str(),
+                     ex.what());
+            warned = true;
+        }
+        transform->setIdentity();
+        return true;
+    }
+}
+#else
+bool LookupLaserToRobotTransform(const std::string &frame_id,
+                                 tf::Transform *transform) {
+    if (!tf_listener_) return false;
+    try {
+        tf::StampedTransform stamped;
+        tf_listener_->lookupTransform(CONFIG_robot_frame,
+                                      frame_id,
+                                      ros::Time(0),
+                                      stamped);
+        *transform = stamped;
+        return true;
+    } catch (tf::TransformException &ex) {
+        static bool warned = false;
+        if (!warned) {
+            LOG_WARN("Failed to lookup transform from '%s' to '%s': %s",
+                     frame_id.c_str(),
+                     CONFIG_robot_frame.c_str(),
+                     ex.what());
+            warned = true;
+        }
+        transform->setIdentity();
+        return true;
+    }
+}
+#endif
+
+std::vector<ColoredPoint2D> BuildLaserPointsInWorld(
+    const LaserScan &laser_scan,
+    const Localization2DMsg &localization) {
+    std::vector<ColoredPoint2D> points;
+    if (laser_scan.ranges.empty()) return points;
+
+#ifdef ROS2
+    tf2::Transform laser_to_robot;
+#else
+    tf::Transform laser_to_robot;
+#endif
+    if (!LookupLaserToRobotTransform(laser_scan.header.frame_id,
+                                     &laser_to_robot)) {
+        return points;
+    }
+
+    const float c = std::cos(localization.pose.theta);
+    const float s = std::sin(localization.pose.theta);
+    const float dtheta = laser_scan.angle_increment;
+
+    for (size_t i = 0; i < laser_scan.ranges.size(); ++i) {
+        const float r = laser_scan.ranges[i];
+        if (r <= laser_scan.range_min || r >= laser_scan.range_max) {
+            continue;
+        }
+        const float a = laser_scan.angle_min + static_cast<float>(i) * dtheta;
+#ifdef ROS2
+        const tf2::Vector3 point_in_laser(r * std::cos(a),
+                                          r * std::sin(a),
+                                          0.0);
+        const tf2::Vector3 point_in_robot = laser_to_robot * point_in_laser;
+        const float xr = static_cast<float>(point_in_robot.x());
+        const float yr = static_cast<float>(point_in_robot.y());
+#else
+        const tf::Vector3 point_in_laser(r * std::cos(a),
+                                         r * std::sin(a),
+                                         0.0);
+        const tf::Vector3 point_in_robot = laser_to_robot * point_in_laser;
+        const float xr = static_cast<float>(point_in_robot.x());
+        const float yr = static_cast<float>(point_in_robot.y());
+#endif
+
+        ColoredPoint2D p;
+        p.point.x = c * xr - s * yr + localization.pose.x;
+        p.point.y = s * xr + c * yr + localization.pose.y;
+        p.color = kLaserColor;
+        points.push_back(p);
+    }
+    return points;
+}
+
 void DropOldMessages() {
     const auto now = GET_TIME();
     const double max_age = CONFIG_message_timeout_sec;
@@ -282,19 +529,12 @@ void SendUpdate() {
         return;
     }
 #endif
-    VisualizationMsg local_msgs;
-    VisualizationMsg global_msgs;
-    for (const VisualizationMsg &m : vis_msgs_) {
-        // std::cout << m << std::endl;
-        if (m.header.frame_id == CONFIG_world_frame) {
-            MergeMessage(m, &global_msgs);
-        } else {
-            MergeMessage(m, &local_msgs);
-        }
-    }
-    server_->Send(local_msgs,
-                  global_msgs,
-                  laser_scan_,
+    VisualizationMsg world_vis =
+        BuildWorldVisualization(vis_msgs_, localization_msg_);
+    MergeVector(BuildLaserPointsInWorld(laser_scan_, localization_msg_),
+                &world_vis.points);
+    server_->Send(VisualizationMsg(),
+                  world_vis,
                   localization_msg_);
 }
 
@@ -304,10 +544,22 @@ void SetInitialPose(float x, float y, float theta, QString map) {
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
     initial_pose_msg_.header.stamp = GET_TIME();
+    initial_pose_msg_.header.frame_id = CONFIG_world_frame;
     initial_pose_msg_.pose.pose.position.x = x;
     initial_pose_msg_.pose.pose.position.y = y;
+    initial_pose_msg_.pose.pose.position.z = 0.0;
+    initial_pose_msg_.pose.pose.orientation.x = 0.0;
+    initial_pose_msg_.pose.pose.orientation.y = 0.0;
     initial_pose_msg_.pose.pose.orientation.w = cos(0.5 * theta);
     initial_pose_msg_.pose.pose.orientation.z = sin(0.5 * theta);
+    auto &cov = initial_pose_msg_.pose.covariance;
+    std::fill(cov.begin(), cov.end(), 0.0);
+    cov[0] = kInitPoseVarianceXY;          // x variance
+    cov[7] = kInitPoseVarianceXY;          // y variance
+    cov[14] = kInitPoseVarianceZ;          // z variance
+    cov[21] = kInitPoseVariancePitchRoll;  // roll variance
+    cov[28] = kInitPoseVariancePitchRoll;  // pitch variance
+    cov[35] = kInitPoseVarianceYaw;        // yaw variance
     PUBLISH(init_loc_pub_, initial_pose_msg_);
     amrl_initial_pose_msg_.header.stamp = GET_TIME();
     amrl_initial_pose_msg_.map = map.toStdString();
@@ -330,8 +582,12 @@ void SetNavGoal(float x, float y, float theta, QString map) {
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
     nav_goal_msg_.header.stamp = GET_TIME();
+    nav_goal_msg_.header.frame_id = CONFIG_world_frame;
     nav_goal_msg_.pose.position.x = x;
     nav_goal_msg_.pose.position.y = y;
+    nav_goal_msg_.pose.position.z = 0.0;
+    nav_goal_msg_.pose.orientation.x = 0.0;
+    nav_goal_msg_.pose.orientation.y = 0.0;
     nav_goal_msg_.pose.orientation.w = cos(0.5 * theta);
     nav_goal_msg_.pose.orientation.z = sin(0.5 * theta);
     PUBLISH(nav_goal_pub_, nav_goal_msg_);
@@ -343,12 +599,31 @@ void SetNavGoal(float x, float y, float theta, QString map) {
     PUBLISH(amrl_nav_goal_pub_, amrl_nav_goal_msg_);
 }
 
+void ChangeMap(QString map) {
+    if (FLAGS_v > 0) {
+        printf("Change map: %s\n", map.toStdString().c_str());
+    }
+    // Store the current map name for continuous publishing
+    current_map_name_ = map.toStdString();
+    // Publish the current map name so other nodes can subscribe to map changes
+    current_map_msg_.data = current_map_name_;
+    PUBLISH(current_map_pub_, current_map_msg_);
+}
+
+void PublishCurrentMap() {
+    if (!current_map_name_.empty() && current_map_pub_) {
+        current_map_msg_.data = current_map_name_;
+        PUBLISH(current_map_pub_, current_map_msg_);
+    }
+}
+
 // Function to create or recreate ROS subscriptions
 void CreateSubscriptions() {
     if (FLAGS_v > 0) {
         printf("Creating ROS subscriptions:\n");
         printf("  Laser: %s\n", CONFIG_laser_topic.c_str());
         printf("  Visualization: %s\n", CONFIG_viz_topic.c_str());
+        printf("  Visualization Local: %s\n", CONFIG_viz_local_topic.c_str());
         printf("  Localization: %s\n", CONFIG_loc_topic.c_str());
         printf("  Nav Status: %s\n", CONFIG_nav_status_topic.c_str());
     }
@@ -361,27 +636,41 @@ void CreateSubscriptions() {
     auto vis_callback = [](const VisualizationMsg::SharedPtr msg) {
         VisualizationCallback(*msg);
     };
+    auto vis_local_callback = [](const VisualizationMsg::SharedPtr msg) {
+        VisualizationCallback(*msg);
+    };
     auto loc_callback = [](const Localization2DMsg::SharedPtr msg) {
         LocalizationCallback(*msg);
     };
     auto nav_status_callback = [](const NavStatusMsg::SharedPtr msg) {
         NavStatusCallback(*msg);
     };
+    auto dynamic_nav_graph_callback = [](const MarkerArray::SharedPtr msg) {
+        DynamicNavGraphCallback(*msg);
+    };
 
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
+    vis_local_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_local_topic, CONFIG_viz_queue_size, vis_local_callback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
     nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, CONFIG_nav_status_queue_size, nav_status_callback);
+    
+    auto graph_qos = rclcpp::QoS(10).reliable().transient_local();
+    dynamic_nav_graph_sub_ = node_->create_subscription<MarkerArray>(
+        CONFIG_dynamic_nav_graph_topic, graph_qos, dynamic_nav_graph_callback);
 #else
     laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
     vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
+    vis_local_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_local_topic, CONFIG_viz_queue_size, &VisualizationCallback);
     localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
     nav_status_sub_ = CREATE_SUBSCRIBER(node_, NavStatusMsg, CONFIG_nav_status_topic, CONFIG_nav_status_queue_size, &NavStatusCallback);
+    dynamic_nav_graph_sub_ = CREATE_SUBSCRIBER(node_, MarkerArray, CONFIG_dynamic_nav_graph_topic, 10, &DynamicNavGraphCallback);
 #endif
 
     // Update tracked topic names
     current_laser_topic_ = CONFIG_laser_topic;
     current_viz_topic_ = CONFIG_viz_topic;
+    current_viz_local_topic_ = CONFIG_viz_local_topic;
     current_loc_topic_ = CONFIG_loc_topic;
 }
 
@@ -394,6 +683,7 @@ void CreatePublishers() {
         printf("  Initial pose (AMRL): %s\n", CONFIG_init_pose_amrl_topic.c_str());
         printf("  Nav goal (AMRL): %s\n", CONFIG_nav_goal_amrl_topic.c_str());
         printf("  Reset goals: %s\n", CONFIG_reset_goals_topic.c_str());
+        printf("  Current map: %s\n", CONFIG_current_map_topic.c_str());
     }
 
     init_loc_pub_ = CREATE_PUBLISHER(node_, PoseWithCovarianceStamped, CONFIG_init_pose_std_topic, CONFIG_pub_queue_size);
@@ -401,12 +691,14 @@ void CreatePublishers() {
     amrl_init_loc_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_init_pose_amrl_topic, CONFIG_pub_queue_size);
     amrl_nav_goal_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_nav_goal_amrl_topic, CONFIG_pub_queue_size);
     reset_nav_goals_pub_ = CREATE_PUBLISHER(node_, Empty, CONFIG_reset_goals_topic, CONFIG_pub_queue_size);
+    current_map_pub_ = CREATE_PUBLISHER(node_, String, CONFIG_current_map_topic, CONFIG_pub_queue_size);
 }
 
 // Function to capture current configuration state
 void CaptureCurrentConfig() {
     current_config_.laser_topic = CONFIG_laser_topic;
     current_config_.viz_topic = CONFIG_viz_topic;
+    current_config_.viz_local_topic = CONFIG_viz_local_topic;
     current_config_.loc_topic = CONFIG_loc_topic;
 
     current_config_.init_pose_std_topic = CONFIG_init_pose_std_topic;
@@ -437,6 +729,7 @@ bool CheckAndUpdateConfiguration() {
     // Check subscriber topics
     if (current_config_.laser_topic != CONFIG_laser_topic ||
         current_config_.viz_topic != CONFIG_viz_topic ||
+        current_config_.viz_local_topic != CONFIG_viz_local_topic ||
         current_config_.loc_topic != CONFIG_loc_topic) {
         subscribers_changed = true;
     }
@@ -474,6 +767,9 @@ bool CheckAndUpdateConfiguration() {
                 if (current_config_.viz_topic != CONFIG_viz_topic) {
                     printf("  Visualization topic: '%s' -> '%s'\n", current_config_.viz_topic.c_str(), CONFIG_viz_topic.c_str());
                 }
+                if (current_config_.viz_local_topic != CONFIG_viz_local_topic) {
+                    printf("  Visualization local topic: '%s' -> '%s'\n", current_config_.viz_local_topic.c_str(), CONFIG_viz_local_topic.c_str());
+                }
                 if (current_config_.loc_topic != CONFIG_loc_topic) {
                     printf("  Localization topic: '%s' -> '%s'\n", current_config_.loc_topic.c_str(), CONFIG_loc_topic.c_str());
                 }
@@ -483,11 +779,15 @@ bool CheckAndUpdateConfiguration() {
 #ifdef ROS2
             laser_sub_.reset();
             vis_sub_.reset();
+            vis_local_sub_.reset();
             localization_sub_.reset();
+            dynamic_nav_graph_sub_.reset();
 #else
             laser_sub_.shutdown();
             vis_sub_.shutdown();
+            vis_local_sub_.shutdown();
             localization_sub_.shutdown();
+            dynamic_nav_graph_sub_.shutdown();
 #endif
             CreateSubscriptions();
         }
@@ -561,9 +861,20 @@ void *RosThread(void *arg) {
     QObject::connect(
         server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
     QObject::connect(
+        server_, &RobotWebSocket::ChangeMapSignal, &ChangeMap);
+    QObject::connect(
         server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
 
     node_ = CREATE_NODE(CONFIG_ros_node_name);
+
+#ifdef ROS2
+    SET_ROS_CLOCK(node_);  // Enable sim time support for GET_TIME()
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
+    tf_listener_ =
+        std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+#else
+    tf_listener_ = std::make_unique<tf::TransformListener>();
+#endif
 
     // Create initial subscriptions and publishers
     CreateSubscriptions();
@@ -612,6 +923,13 @@ int main(int argc, char *argv[]) {
     google::ParseCommandLineFlags(&argc, &argv, true);
     google::InitGoogleLogging(argv[0]);
 
+    // Check if config file was provided
+    if (FLAGS_config_file.empty()) {
+        fprintf(stderr, "ERROR: --config_file flag is required. Please specify a config file path.\n");
+        fprintf(stderr, "Usage: %s --config_file=<path_to_config_file> [other options]\n", argv[0]);
+        exit(1);
+    }
+
     // Initialize the configuration system with config-reader
     config_reader::ConfigReader config_reader({FLAGS_config_file});
 
@@ -635,6 +953,14 @@ int main(int argc, char *argv[]) {
         }
     });
     exitTimer.start(CONFIG_exit_check_interval_ms);  // Check based on config
+
+    // Setup timer for continuous current map publishing
+    QTimer mapPublishTimer;
+    QObject::connect(&mapPublishTimer, &QTimer::timeout, []() {
+        PublishCurrentMap();
+    });
+    const int map_publish_interval_ms = static_cast<int>(1000.0 / CONFIG_current_map_publish_rate_hz);
+    mapPublishTimer.start(map_publish_interval_ms);
 
     pthread_t ros_thread;
     pthread_create(&ros_thread, NULL, &RosThread, NULL);

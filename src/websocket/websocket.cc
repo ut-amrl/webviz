@@ -47,7 +47,6 @@
 #include "amrl_msgs/msg/colored_arc2_d.hpp"
 #include "amrl_msgs/msg/colored_text.hpp"
 #include "amrl_msgs/msg/visualization_msg.hpp"
-#include "sensor_msgs/msg/laser_scan.hpp"
 using amrl_msgs::msg::ColoredArc2D;
 using amrl_msgs::msg::ColoredLine2D;
 using amrl_msgs::msg::ColoredPoint2D;
@@ -55,7 +54,6 @@ using amrl_msgs::msg::ColoredText;
 using amrl_msgs::msg::Localization2DMsg;
 using amrl_msgs::msg::Point2D;
 using amrl_msgs::msg::VisualizationMsg;
-using sensor_msgs::msg::LaserScan;
 #else
 #include "amrl_msgs/Localization2DMsg.h"
 #include "amrl_msgs/Point2D.h"
@@ -64,7 +62,6 @@ using sensor_msgs::msg::LaserScan;
 #include "amrl_msgs/ColoredArc2D.h"
 #include "amrl_msgs/ColoredText.h"
 #include "amrl_msgs/VisualizationMsg.h"
-#include "sensor_msgs/LaserScan.h"
 using amrl_msgs::ColoredArc2D;
 using amrl_msgs::ColoredLine2D;
 using amrl_msgs::ColoredPoint2D;
@@ -72,7 +69,6 @@ using amrl_msgs::ColoredText;
 using amrl_msgs::Localization2DMsg;
 using amrl_msgs::Point2D;
 using amrl_msgs::VisualizationMsg;
-using sensor_msgs::LaserScan;
 #endif
 
 #include "ros_compat.h"
@@ -83,7 +79,6 @@ DECLARE_int32(v);
 
 // Configuration variables used in websocket.cc
 CONFIG_INT(protocol_nonce, "data_processing.protocol_nonce");
-CONFIG_DOUBLE(laser_range_scale, "data_processing.laser_range_scale");
 CONFIG_INT(map_name_buffer_size, "data_processing.map_name_buffer_size");
 CONFIG_INT(text_buffer_size, "data_processing.text_buffer_size");
 
@@ -95,7 +90,6 @@ RobotWebSocket::RobotWebSocket(uint16_t port) : ws_server_(new QWebSocketServer(
                                                                                 QWebSocketServer::NonSecureMode)),
                                                 local_vis_(),
                                                 global_vis_(),
-                                                laser_scan_(),
                                                 localization_() {
     qRegisterMetaType<uint8_t>("uint8_t");
     if (ws_server_->listen(QHostAddress::Any, port)) {
@@ -129,6 +123,8 @@ void RobotWebSocket::onNewConnection() {
             this, &RobotWebSocket::SendDataSlot);
     connect(this, &RobotWebSocket::NavStatusSignal,
             this, &RobotWebSocket::NavStatusSlot);
+    connect(this, &RobotWebSocket::DynamicNavGraphSignal,
+            this, &RobotWebSocket::DynamicNavGraphSlot);
 
     clients_.push_back(socket);
 }
@@ -179,63 +175,11 @@ char* WriteElementVector(const std::vector<T>& v, char* const buf) {
     return (buf + len);
 }
 
-DataMessage GenerateTestData(const MessageHeader& h) {
-    DataMessage msg;
-    msg.header = h;
-    msg.laser_scan.resize(h.num_laser_rays);
-    msg.points.resize(h.num_points);
-    msg.lines.resize(h.num_lines);
-    msg.arcs.resize(h.num_arcs);
-    msg.text_annotations.resize(h.num_text_annotations);
-    for (size_t i = 0; i < msg.laser_scan.size(); ++i) {
-        msg.laser_scan[i] = 10 * i;
-    }
-    for (size_t i = 0; i < msg.points.size(); ++i) {
-        msg.points[i].point.x = 1.0 * static_cast<float>(i) + 0.1;
-        msg.points[i].point.y = 2.0 * static_cast<float>(i) + 0.2;
-        const uint8_t x = static_cast<uint8_t>(i);
-        msg.points[i].color = (x << 16) | (x << 8) | x;
-    }
-    for (size_t i = 0; i < msg.lines.size(); ++i) {
-        msg.lines[i].p0.x = 0.1 * i;
-        msg.lines[i].p0.y = 0.01 * i;
-        msg.lines[i].p1.x = 1.0 * i;
-        msg.lines[i].p1.y = 10.0 * i;
-        const uint8_t x = static_cast<uint8_t>(i);
-        msg.lines[i].color = (x << 16) | (x << 8) | x;
-    }
-    for (size_t i = 0; i < msg.arcs.size(); ++i) {
-        msg.arcs[i].center.x = 1.0 * i;
-        msg.arcs[i].center.y = 2.0 * i;
-        msg.arcs[i].radius = i;
-        msg.arcs[i].start_angle = 2.0 * i;
-        msg.arcs[i].end_angle = 3.0 * i;
-        if (i == 0) {
-            msg.arcs[i].radius = 1.0 / 0.0;
-            msg.arcs[i].start_angle = 0.0 / 0.0;
-            msg.arcs[i].end_angle = -10.0 / 0.0;
-        }
-        const uint8_t x = static_cast<uint8_t>(i);
-        msg.arcs[i].color = (x << 16) | (x << 8) | x;
-    }
-    for (size_t j = 0; j < msg.text_annotations.size(); j++) {
-        msg.text_annotations[j].start.x = 1.0 * j;
-        msg.text_annotations[j].start.y = 2.0 * j;
-        const uint8_t x = static_cast<uint8_t>(j);
-        msg.text_annotations[j].color = (x << 16) | (x << 8) | x;
-        msg.text_annotations[j].size_em = 3.0 * j;
-        const char* s = std::to_string(j).c_str();
-        strncpy(msg.text_annotations[j].text, s, j / 10);
-    }
-    return msg;
-}
-
 QByteArray DataMessage::ToByteArray() const {
     QByteArray data;
     data.resize(header.GetByteLength());
     char* buf = data.data();
     buf = WriteElement(header, buf);
-    buf = WriteElementVector(laser_scan, buf);
     buf = WriteElementVector(points, buf);
     buf = WriteElementVector(lines, buf);
     buf = WriteElementVector(arcs, buf);
@@ -244,7 +188,6 @@ QByteArray DataMessage::ToByteArray() const {
 }
 
 DataMessage DataMessage::FromRosMessages(
-    const LaserScan& laser_msg,
     const VisualizationMsg& local_msg,
     const VisualizationMsg& global_msg,
     const Localization2DMsg& localization_msg) {
@@ -259,18 +202,6 @@ DataMessage DataMessage::FromRosMessages(
     strncpy(msg.header.map,
             localization_msg.map.data(),
             std::min(CONFIG_map_name_buffer_size - 1, static_cast<int>(localization_msg.map.size())));
-    msg.header.laser_min_angle = laser_msg.angle_min;
-    msg.header.laser_max_angle = laser_msg.angle_max;
-    msg.header.num_laser_rays = laser_msg.ranges.size();
-    msg.laser_scan.resize(laser_msg.ranges.size());
-    for (size_t i = 0; i < laser_msg.ranges.size(); ++i) {
-        if (laser_msg.ranges[i] <= laser_msg.range_min ||
-            laser_msg.ranges[i] >= laser_msg.range_max) {
-            msg.laser_scan[i] = 0;
-        } else {
-            msg.laser_scan[i] = static_cast<uint32_t>(laser_msg.ranges[i] * CONFIG_laser_range_scale);
-        }
-    }
     msg.points = local_msg.points;
     msg.header.num_local_points = local_msg.points.size();
     msg.points.insert(msg.points.end(),
@@ -322,7 +253,6 @@ DataMessage DataMessage::FromRosMessages(
             "num_lines: %d "
             "num_arcs: %d "
             "num_text_annotations: %d "
-            "num_laser_rays: %d "
             "num_local_points: %d "
             "num_local_lines: %d "
             "num_local_arcs: %d "
@@ -332,7 +262,6 @@ DataMessage DataMessage::FromRosMessages(
             msg.header.num_lines,
             msg.header.num_arcs,
             msg.header.num_text_annotations,
-            msg.header.num_laser_rays,
             msg.header.num_local_points,
             msg.header.num_local_lines,
             msg.header.num_local_arcs,
@@ -358,6 +287,17 @@ void RobotWebSocket::SendNavStatus(uint8_t status) {
 
 void RobotWebSocket::NavStatusSlot(uint8_t status) {
     SendNavStatus(status);
+}
+
+void RobotWebSocket::SendDynamicNavGraph(const QString& json) {
+    for (auto c : clients_) {
+        CHECK_NOTNULL(c);
+        c->sendTextMessage(json);
+    }
+}
+
+void RobotWebSocket::DynamicNavGraphSlot(QString json) {
+    SendDynamicNavGraph(json);
 }
 
 bool AllNumericalKeysPresent(const QStringList& expected,
@@ -408,6 +348,12 @@ void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
                          json.value("y").toDouble(),
                          json.value("theta").toDouble(),
                          json.value("map").toString());
+    } else if (type == "change_map") {
+        if (!StringKeyPresent("map", json)) {
+            SendError("Invalid change_map parameters");
+            return;
+        }
+        ChangeMapSignal(json.value("map").toString());
     } else if (type == "reset_nav_goals") {
         ResetNavGoalsSignal();
     } else {
@@ -419,7 +365,7 @@ void RobotWebSocket::SendDataSlot() {
     if (clients_.empty()) return;
     data_mutex_.lock();
     const auto data = DataMessage::FromRosMessages(
-        laser_scan_, local_vis_, global_vis_, localization_);
+        local_vis_, global_vis_, localization_);
     const auto buffer = data.ToByteArray();
     CHECK_EQ(data.header.GetByteLength(), buffer.size());
     for (auto c : clients_) {
@@ -430,13 +376,11 @@ void RobotWebSocket::SendDataSlot() {
 
 void RobotWebSocket::Send(const VisualizationMsg& local_vis,
                           const VisualizationMsg& global_vis,
-                          const LaserScan& laser_scan,
                           const Localization2DMsg& localization) {
     data_mutex_.lock();
     localization_ = localization;
     local_vis_ = local_vis;
     global_vis_ = global_vis;
-    laser_scan_ = laser_scan;
     data_mutex_.unlock();
     SendDataSignal();
 }

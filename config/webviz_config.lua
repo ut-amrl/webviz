@@ -8,22 +8,26 @@ websocket = {
   update_rate_hz = 40.0;           -- Visualization update rate (fps)
   message_timeout_sec = 2.0;       -- Maximum age before messages are dropped
   exit_check_interval_ms = 100;    -- Timer interval for exit signal checking
+  current_map_publish_rate_hz = 1.0; -- Rate to publish current map name
 };
 
 -- ROS Topics Configuration
 ros_topics = {
   -- Input topics (subscribers)
   laser_scan = "/scan";
-  visualization = "/visualization"; 
+  visualization = "/visualization";
+  visualization_local = "/visualization_local";
   localization = "/localization";
   nav_status = "/navigation_goal_status";
-  
+
   -- Output topics (publishers)
   initial_pose_std = "/initialpose";           -- Standard ROS nav stack
   nav_goal_std = "/move_base_simple/goal";     -- Standard ROS nav stack
   initial_pose_amrl = "/set_pose";             -- AMRL format
   nav_goal_amrl = "/set_nav_target";           -- AMRL format
   reset_nav_goals = "/reset_nav_goals";        -- Reset command
+  current_map = "/current_map";                -- Current active map name
+  dynamic_nav_graph = "/voronoi_graph";        -- Dynamic navigation graph
 };
 
 -- ROS Node Configuration  
@@ -46,7 +50,6 @@ frames = {
 
 -- Data Processing Configuration
 data_processing = {
-  laser_range_scale = 1000.0;      -- Convert meters to millimeters for transmission
   protocol_nonce = 42;             -- Binary protocol identifier
   text_buffer_size = 32;           -- Max characters for text annotations
   map_name_buffer_size = 32;       -- Max characters for map names
