@@ -44,9 +44,9 @@ jobs:
           apt-get install -y git qt5-default libqt5websockets5-dev \
             ros-noetic-angles ros-noetic-tf ros-noetic-xmlrpcpp python-is-python3 \
             libgtest-dev libgoogle-glog-dev cmake build-essential \
-            libgflags-dev libyaml-cpp-dev liblua5.1-0-dev \
+            libgflags-dev libyaml-cpp-dev liblua5.2-dev \
             libeigen3-dev
-          
+
       # Install GCC 12 for ROS2 Humble
       - name: Install GCC 12 (ROS2 Humble)
         if: matrix.ros_distro == 'humble'
@@ -65,7 +65,7 @@ jobs:
           apt-get install -y git qtbase5-dev libqt5websockets5-dev \
             ros-humble-angles ros-humble-tf2 python3 python3-pip \
             libgtest-dev libgoogle-glog-dev cmake build-essential \
-            libgflags-dev libyaml-cpp-dev liblua5.1-0-dev \
+            libgflags-dev libyaml-cpp-dev liblua5.2-dev \
             libeigen3-dev
           pip3 install colcon-common-extensions
 

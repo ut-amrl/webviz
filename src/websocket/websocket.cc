@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -38,7 +39,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
-#ifdef ROS2
+#include "rclcpp/rclcpp.hpp"
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
 #include "amrl_msgs/msg/point2_d.hpp"
 #include "amrl_msgs/msg/colored_point2_d.hpp"
@@ -55,26 +56,6 @@ using amrl_msgs::msg::Localization2DMsg;
 using amrl_msgs::msg::Point2D;
 using amrl_msgs::msg::VisualizationMsg;
 using sensor_msgs::msg::LaserScan;
-#else
-#include "amrl_msgs/Localization2DMsg.h"
-#include "amrl_msgs/Point2D.h"
-#include "amrl_msgs/ColoredPoint2D.h"
-#include "amrl_msgs/ColoredLine2D.h"
-#include "amrl_msgs/ColoredArc2D.h"
-#include "amrl_msgs/ColoredText.h"
-#include "amrl_msgs/VisualizationMsg.h"
-#include "sensor_msgs/LaserScan.h"
-using amrl_msgs::ColoredArc2D;
-using amrl_msgs::ColoredLine2D;
-using amrl_msgs::ColoredPoint2D;
-using amrl_msgs::ColoredText;
-using amrl_msgs::Localization2DMsg;
-using amrl_msgs::Point2D;
-using amrl_msgs::VisualizationMsg;
-using sensor_msgs::LaserScan;
-#endif
-
-#include "ros_compat.h"
 
 using std::vector;
 
@@ -86,7 +67,14 @@ CONFIG_DOUBLE(laser_range_scale, "data_processing.laser_range_scale");
 CONFIG_INT(map_name_buffer_size, "data_processing.map_name_buffer_size");
 CONFIG_INT(text_buffer_size, "data_processing.text_buffer_size");
 
-MessageHeader::MessageHeader() {
+// Nonce used to mark ImageFrame binary messages. Distinct from
+// CONFIG_protocol_nonce (the vis-data nonce) so the browser can route on it.
+static constexpr uint32_t kImageNonce = 43;
+// Cap topic name length transmitted in image frames.
+static constexpr uint32_t kMaxImageTopicLen = 64;
+
+MessageHeader::MessageHeader()
+{
     nonce = CONFIG_protocol_nonce;
 }
 
@@ -95,24 +83,29 @@ RobotWebSocket::RobotWebSocket(uint16_t port) : ws_server_(new QWebSocketServer(
                                                 local_vis_(),
                                                 global_vis_(),
                                                 laser_scan_(),
-                                                localization_() {
-    if (ws_server_->listen(QHostAddress::Any, port)) {
+                                                localization_()
+{
+    if (ws_server_->listen(QHostAddress::Any, port))
+    {
         printf("WebViz listening on port %d\n", port);
         connect(ws_server_, &QWebSocketServer::newConnection,
                 this, &RobotWebSocket::onNewConnection);
     }
     // Initialize localization time stamp to zero.
-    localization_.header.stamp = ZERO_TIME();
+    localization_.header.stamp = rclcpp::Time(0, 0);
 }
 
-RobotWebSocket::~RobotWebSocket() {
+RobotWebSocket::~RobotWebSocket()
+{
     ws_server_->close();
     qDeleteAll(clients_.begin(), clients_.end());
 }
 
-void RobotWebSocket::onNewConnection() {
-    auto* socket = ws_server_->nextPendingConnection();
-    if (FLAGS_v > 0) {
+void RobotWebSocket::onNewConnection()
+{
+    auto *socket = ws_server_->nextPendingConnection();
+    if (FLAGS_v > 0)
+    {
         printf("WebSocket client connected: %s\n",
                socket->peerAddress().toString().toStdString().c_str());
     }
@@ -125,57 +118,74 @@ void RobotWebSocket::onNewConnection() {
             this, &RobotWebSocket::socketDisconnected);
     connect(this, &RobotWebSocket::SendDataSignal,
             this, &RobotWebSocket::SendDataSlot);
+    connect(this, &RobotWebSocket::SendImageSignal,
+            this, &RobotWebSocket::SendImageSlot);
+    connect(this, &RobotWebSocket::SendForesightStatusSignal,
+            this, &RobotWebSocket::SendForesightStatusSlot);
 
     clients_.push_back(socket);
 }
 
-void RobotWebSocket::processTextMessage(QString message) {
-    if (FLAGS_v > 1) {
+void RobotWebSocket::processTextMessage(QString message)
+{
+    if (FLAGS_v > 1)
+    {
         printf("WebSocket message received: %s\n", message.toStdString().c_str());
     }
     QJsonParseError error;
     QJsonDocument json_doc = QJsonDocument::fromJson(message.toUtf8(), &error);
-    if (error.error == QJsonParseError::NoError) {
+    if (error.error == QJsonParseError::NoError)
+    {
         QJsonObject json_obj = json_doc.object();
         ProcessCallback(json_obj);
-    } else {
+    }
+    else
+    {
         printf("ERROR: Ignoring websocket message, JSON parsing error: %s\n",
                error.errorString().toStdString().c_str());
     }
 }
 
-void RobotWebSocket::processBinaryMessage(QByteArray message) {
-    if (FLAGS_v > 1) {
+void RobotWebSocket::processBinaryMessage(QByteArray message)
+{
+    if (FLAGS_v > 1)
+    {
         printf("WebSocket Binary message received: %s\n", message.data());
     }
 }
 
-void RobotWebSocket::socketDisconnected() {
-    auto* client = qobject_cast<QWebSocket*>(sender());
-    if (FLAGS_v > 0) {
+void RobotWebSocket::socketDisconnected()
+{
+    auto *client = qobject_cast<QWebSocket *>(sender());
+    if (FLAGS_v > 0)
+    {
         printf("WebSocket client disconnected: %s\n",
                client->peerAddress().toString().toStdString().c_str());
     }
-    if (client) {
+    if (client)
+    {
         clients_.erase(std::find(clients_.begin(), clients_.end(), client));
         client->deleteLater();
     }
 }
 
 template <typename T>
-char* WriteElement(const T& x, char* const buf) {
-    *reinterpret_cast<T*>(buf) = x;
+char *WriteElement(const T &x, char *const buf)
+{
+    *reinterpret_cast<T *>(buf) = x;
     return (buf + sizeof(x));
 }
 
 template <typename T>
-char* WriteElementVector(const std::vector<T>& v, char* const buf) {
+char *WriteElementVector(const std::vector<T> &v, char *const buf)
+{
     const size_t len = v.size() * sizeof(T);
     memcpy(buf, v.data(), len);
     return (buf + len);
 }
 
-DataMessage GenerateTestData(const MessageHeader& h) {
+DataMessage GenerateTestData(const MessageHeader &h)
+{
     DataMessage msg;
     msg.header = h;
     msg.laser_scan.resize(h.num_laser_rays);
@@ -183,16 +193,19 @@ DataMessage GenerateTestData(const MessageHeader& h) {
     msg.lines.resize(h.num_lines);
     msg.arcs.resize(h.num_arcs);
     msg.text_annotations.resize(h.num_text_annotations);
-    for (size_t i = 0; i < msg.laser_scan.size(); ++i) {
+    for (size_t i = 0; i < msg.laser_scan.size(); ++i)
+    {
         msg.laser_scan[i] = 10 * i;
     }
-    for (size_t i = 0; i < msg.points.size(); ++i) {
+    for (size_t i = 0; i < msg.points.size(); ++i)
+    {
         msg.points[i].point.x = 1.0 * static_cast<float>(i) + 0.1;
         msg.points[i].point.y = 2.0 * static_cast<float>(i) + 0.2;
         const uint8_t x = static_cast<uint8_t>(i);
         msg.points[i].color = (x << 16) | (x << 8) | x;
     }
-    for (size_t i = 0; i < msg.lines.size(); ++i) {
+    for (size_t i = 0; i < msg.lines.size(); ++i)
+    {
         msg.lines[i].p0.x = 0.1 * i;
         msg.lines[i].p0.y = 0.01 * i;
         msg.lines[i].p1.x = 1.0 * i;
@@ -200,13 +213,15 @@ DataMessage GenerateTestData(const MessageHeader& h) {
         const uint8_t x = static_cast<uint8_t>(i);
         msg.lines[i].color = (x << 16) | (x << 8) | x;
     }
-    for (size_t i = 0; i < msg.arcs.size(); ++i) {
+    for (size_t i = 0; i < msg.arcs.size(); ++i)
+    {
         msg.arcs[i].center.x = 1.0 * i;
         msg.arcs[i].center.y = 2.0 * i;
         msg.arcs[i].radius = i;
         msg.arcs[i].start_angle = 2.0 * i;
         msg.arcs[i].end_angle = 3.0 * i;
-        if (i == 0) {
+        if (i == 0)
+        {
             msg.arcs[i].radius = 1.0 / 0.0;
             msg.arcs[i].start_angle = 0.0 / 0.0;
             msg.arcs[i].end_angle = -10.0 / 0.0;
@@ -214,22 +229,24 @@ DataMessage GenerateTestData(const MessageHeader& h) {
         const uint8_t x = static_cast<uint8_t>(i);
         msg.arcs[i].color = (x << 16) | (x << 8) | x;
 
-        for (size_t i = 0; i < msg.text_annotations.size(); i++) {
+        for (size_t i = 0; i < msg.text_annotations.size(); i++)
+        {
             msg.text_annotations[i].start.x = 1.0 * i;
             msg.text_annotations[i].start.y = 2.0 * i;
             msg.text_annotations[i].color = (x << 16) | (x << 8) | x;
             msg.text_annotations[i].size_em = 3.0 * i;
-            const char* s = std::to_string(i).c_str();
+            const char *s = std::to_string(i).c_str();
             strncpy(msg.text_annotations[i].text, s, i / 10);
         }
     }
     return msg;
 }
 
-QByteArray DataMessage::ToByteArray() const {
+QByteArray DataMessage::ToByteArray() const
+{
     QByteArray data;
     data.resize(header.GetByteLength());
-    char* buf = data.data();
+    char *buf = data.data();
     buf = WriteElement(header, buf);
     buf = WriteElementVector(laser_scan, buf);
     buf = WriteElementVector(points, buf);
@@ -239,14 +256,45 @@ QByteArray DataMessage::ToByteArray() const {
     return data;
 }
 
+QByteArray ImageFrame::ToByteArray() const
+{
+    // Layout (little-endian):
+    //   uint32 nonce, uint32 panel_id, uint32 topic_str_len, uint32 jpeg_len,
+    //   double stamp_sec, char[topic_str_len] topic, uint8[jpeg_len] jpeg.
+    const uint32_t topic_len =
+        std::min<uint32_t>(static_cast<uint32_t>(topic.size()), kMaxImageTopicLen);
+    const uint32_t jpeg_len = static_cast<uint32_t>(jpeg.size());
+    const size_t header_len = 4 * sizeof(uint32_t) + sizeof(double);
+    QByteArray data;
+    data.resize(static_cast<int>(header_len + topic_len + jpeg_len));
+    char *buf = data.data();
+    buf = WriteElement<uint32_t>(kImageNonce, buf);
+    buf = WriteElement<uint32_t>(panel_id, buf);
+    buf = WriteElement<uint32_t>(topic_len, buf);
+    buf = WriteElement<uint32_t>(jpeg_len, buf);
+    buf = WriteElement<double>(stamp_sec, buf);
+    if (topic_len > 0)
+    {
+        memcpy(buf, topic.data(), topic_len);
+        buf += topic_len;
+    }
+    if (jpeg_len > 0)
+    {
+        memcpy(buf, jpeg.constData(), jpeg_len);
+    }
+    return data;
+}
+
 DataMessage DataMessage::FromRosMessages(
-    const LaserScan& laser_msg,
-    const VisualizationMsg& local_msg,
-    const VisualizationMsg& global_msg,
-    const Localization2DMsg& localization_msg) {
+    const LaserScan &laser_msg,
+    const VisualizationMsg &local_msg,
+    const VisualizationMsg &global_msg,
+    const Localization2DMsg &localization_msg)
+{
     static const bool kDebug = false;
     DataMessage msg;
-    for (size_t i = 0; i < sizeof(msg.header.map); ++i) {
+    for (size_t i = 0; i < sizeof(msg.header.map); ++i)
+    {
         msg.header.map[i] = 0;
     }
     msg.header.loc_x = localization_msg.pose.x;
@@ -259,11 +307,15 @@ DataMessage DataMessage::FromRosMessages(
     msg.header.laser_max_angle = laser_msg.angle_max;
     msg.header.num_laser_rays = laser_msg.ranges.size();
     msg.laser_scan.resize(laser_msg.ranges.size());
-    for (size_t i = 0; i < laser_msg.ranges.size(); ++i) {
+    for (size_t i = 0; i < laser_msg.ranges.size(); ++i)
+    {
         if (laser_msg.ranges[i] <= laser_msg.range_min ||
-            laser_msg.ranges[i] >= laser_msg.range_max) {
+            laser_msg.ranges[i] >= laser_msg.range_max)
+        {
             msg.laser_scan[i] = 0;
-        } else {
+        }
+        else
+        {
             msg.laser_scan[i] = static_cast<uint32_t>(laser_msg.ranges[i] * CONFIG_laser_range_scale);
         }
     }
@@ -290,7 +342,8 @@ DataMessage DataMessage::FromRosMessages(
     msg.header.num_arcs = msg.arcs.size();
     msg.header.num_local_text_annotations = local_msg.text_annotations.size();
     msg.header.num_text_annotations = local_msg.text_annotations.size() + global_msg.text_annotations.size();
-    for (ColoredText text : local_msg.text_annotations) {
+    for (ColoredText text : local_msg.text_annotations)
+    {
         ColoredTextNative localText;
         localText.start = text.start;
         localText.color = text.color;
@@ -300,7 +353,8 @@ DataMessage DataMessage::FromRosMessages(
         localText.text[size] = 0;
         msg.text_annotations.push_back(localText);
     }
-    for (ColoredText text : global_msg.text_annotations) {
+    for (ColoredText text : global_msg.text_annotations)
+    {
         ColoredTextNative localText;
         localText.start = text.start;
         localText.color = text.color;
@@ -311,7 +365,8 @@ DataMessage DataMessage::FromRosMessages(
         msg.text_annotations.push_back(localText);
     }
 
-    if (kDebug) {
+    if (kDebug)
+    {
         printf(
             "nonce: %d "
             "num_points: %d "
@@ -337,83 +392,130 @@ DataMessage DataMessage::FromRosMessages(
     return msg;
 }
 
-void RobotWebSocket::SendError(const QString& error_val) {
-    for (auto c : clients_) {
+void RobotWebSocket::SendError(const QString &error_val)
+{
+    for (auto c : clients_)
+    {
         CHECK_NOTNULL(c);
         c->sendTextMessage("{ \"error\": \"" + error_val + "\" }");
     }
 }
 
-bool AllNumericalKeysPresent(const QStringList& expected,
-                             const QJsonObject& json) {
-    for (const QString& key : expected) {
-        if (!json.contains(key)) return false;
+bool AllNumericalKeysPresent(const QStringList &expected,
+                             const QJsonObject &json)
+{
+    for (const QString &key : expected)
+    {
+        if (!json.contains(key))
+            return false;
         const QJsonValue val = json.value(key);
-        if (!val.isDouble()) return false;
+        if (!val.isDouble())
+            return false;
     }
     return true;
 }
 
-bool StringKeyPresent(const QString& key,
-                      const QJsonObject& json) {
-    if (!json.contains(key)) return false;
+bool StringKeyPresent(const QString &key,
+                      const QJsonObject &json)
+{
+    if (!json.contains(key))
+        return false;
     const QJsonValue val = json.value(key);
     return val.isString();
 }
 
-void RobotWebSocket::ProcessCallback(const QJsonObject& json) {
+void RobotWebSocket::ProcessCallback(const QJsonObject &json)
+{
     static const bool kDebug = false;
-    if (kDebug) {
+    if (kDebug)
+    {
         qInfo() << "Callback JSON:\n"
                 << json;
     }
-    if (!json.contains("type")) {
+    if (!json.contains("type"))
+    {
         SendError("Malformed request");
         return;
     }
     const auto type = json.value("type");
-    if (type == "set_initial_pose") {
+    if (type == "set_initial_pose")
+    {
         if (!AllNumericalKeysPresent({"x", "y", "theta"}, json) ||
-            !StringKeyPresent("map", json)) {
+            !StringKeyPresent("map", json))
+        {
             SendError("Invalid set_initial_pose parameters");
         }
         SetInitialPoseSignal(json.value("x").toDouble(),
                              json.value("y").toDouble(),
                              json.value("theta").toDouble(),
                              json.value("map").toString());
-    } else if (type == "set_nav_goal") {
+    }
+    else if (type == "set_nav_goal")
+    {
         if (!AllNumericalKeysPresent({"x", "y", "theta"}, json) ||
-            !StringKeyPresent("map", json)) {
+            !StringKeyPresent("map", json))
+        {
             SendError("Invalid set_nav_goal parameters");
         }
         SetNavGoalSignal(json.value("x").toDouble(),
                          json.value("y").toDouble(),
                          json.value("theta").toDouble(),
                          json.value("map").toString());
-    } else if (type == "reset_nav_goals") {
+    }
+    else if (type == "reset_nav_goals")
+    {
         ResetNavGoalsSignal();
-    } else {
+    }
+    else if (type == "foresight_command")
+    {
+        if (!StringKeyPresent("text", json))
+        {
+            SendError("Invalid foresight_command parameters");
+            return;
+        }
+        ForesightCommandSignal(json.value("text").toString());
+    }
+    else
+    {
         SendError("Unrecognized request type");
     }
 }
 
-void RobotWebSocket::SendDataSlot() {
-    if (clients_.empty()) return;
+void RobotWebSocket::SendDataSlot()
+{
+    if (clients_.empty())
+        return;
     data_mutex_.lock();
     const auto data = DataMessage::FromRosMessages(
         laser_scan_, local_vis_, global_vis_, localization_);
     const auto buffer = data.ToByteArray();
     CHECK_EQ(data.header.GetByteLength(), buffer.size());
-    for (auto c : clients_) {
+    if (FLAGS_v > 2)
+    {
+        static auto last_log = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(now - last_log).count() >= 1.0)
+        {
+            fprintf(stderr,
+                    "[ws] send: global_lines=%zu local_lines=%zu bytes=%d clients=%d\n",
+                    global_vis_.lines.size(), local_vis_.lines.size(),
+                    static_cast<int>(buffer.size()),
+                    static_cast<int>(clients_.size()));
+            last_log = now;
+        }
+    }
+    for (auto c : clients_)
+    {
         c->sendBinaryMessage(buffer);
     }
     data_mutex_.unlock();
 }
 
-void RobotWebSocket::Send(const VisualizationMsg& local_vis,
-                          const VisualizationMsg& global_vis,
-                          const LaserScan& laser_scan,
-                          const Localization2DMsg& localization) {
+void RobotWebSocket::Send(const VisualizationMsg &local_vis,
+                          const VisualizationMsg &global_vis,
+                          const LaserScan &laser_scan,
+                          const Localization2DMsg &localization)
+{
     data_mutex_.lock();
     localization_ = localization;
     local_vis_ = local_vis;
@@ -421,4 +523,73 @@ void RobotWebSocket::Send(const VisualizationMsg& local_vis,
     laser_scan_ = laser_scan;
     data_mutex_.unlock();
     SendDataSignal();
+}
+
+void RobotWebSocket::SendImage(uint32_t panel_id,
+                               const std::string &topic,
+                               const QByteArray &jpeg,
+                               double stamp_sec)
+{
+    image_mutex_.lock();
+    image_queue_.push_back({panel_id, topic, stamp_sec, jpeg});
+    image_mutex_.unlock();
+    SendImageSignal();
+}
+
+void RobotWebSocket::SendImageSlot()
+{
+    if (clients_.empty())
+    {
+        // Drop pending frames so the queue does not grow unbounded with no
+        // listeners.
+        image_mutex_.lock();
+        image_queue_.clear();
+        image_mutex_.unlock();
+        return;
+    }
+    std::deque<ImageFrame> drained;
+    image_mutex_.lock();
+    drained.swap(image_queue_);
+    image_mutex_.unlock();
+    for (const auto &frame : drained)
+    {
+        const auto buffer = frame.ToByteArray();
+        for (auto *c : clients_)
+        {
+            c->sendBinaryMessage(buffer);
+        }
+    }
+}
+
+void RobotWebSocket::SendForesightStatus(const QString &state,
+                                         const QString &verdict,
+                                         const QString &reason,
+                                         quint32 reflection_id)
+{
+    SendForesightStatusSignal(state, verdict, reason, reflection_id);
+}
+
+void RobotWebSocket::SendForesightStatusSlot(QString state,
+                                             QString verdict,
+                                             QString reason,
+                                             quint32 reflection_id)
+{
+    fprintf(stderr, "[fs] slot fired clients=%zu state='%s' verdict='%s'\n",
+            clients_.size(), state.toStdString().c_str(),
+            verdict.toStdString().c_str());
+    if (clients_.empty())
+        return;
+    QJsonObject obj;
+    obj.insert("type", QJsonValue("foresight_response"));
+    obj.insert("state", QJsonValue(state));
+    obj.insert("verdict", QJsonValue(verdict));
+    obj.insert("reason", QJsonValue(reason));
+    obj.insert("reflection_id",
+               QJsonValue(static_cast<qint64>(reflection_id)));
+    const QString text =
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    for (auto *c : clients_)
+    {
+        c->sendTextMessage(text);
+    }
 }

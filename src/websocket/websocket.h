@@ -27,9 +27,11 @@
 #include <QtCore/QObject>
 #include <QtCore/QList>
 #include <QtCore/QByteArray>
+#include <QtCore/QString>
+#include <deque>
+#include <string>
 #include <vector>
 
-#ifdef ROS2
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
 #include "amrl_msgs/msg/point2_d.hpp"
 #include "amrl_msgs/msg/colored_point2_d.hpp"
@@ -46,65 +48,63 @@ using amrl_msgs::msg::Localization2DMsg;
 using amrl_msgs::msg::Point2D;
 using amrl_msgs::msg::VisualizationMsg;
 using sensor_msgs::msg::LaserScan;
-#else
-#include "amrl_msgs/Localization2DMsg.h"
-#include "amrl_msgs/Point2D.h"
-#include "amrl_msgs/ColoredPoint2D.h"
-#include "amrl_msgs/ColoredLine2D.h"
-#include "amrl_msgs/ColoredArc2D.h"
-#include "amrl_msgs/ColoredText.h"
-#include "amrl_msgs/VisualizationMsg.h"
-#include "sensor_msgs/LaserScan.h"
-using amrl_msgs::ColoredArc2D;
-using amrl_msgs::ColoredLine2D;
-using amrl_msgs::ColoredPoint2D;
-using amrl_msgs::ColoredText;
-using amrl_msgs::Localization2DMsg;
-using amrl_msgs::Point2D;
-using amrl_msgs::VisualizationMsg;
-using sensor_msgs::LaserScan;
-#endif
 
 class QWebSocketServer;
 class QWebSocket;
 
-struct MessageHeader {
-    MessageHeader();                      // Move implementation to .cc file
-    uint32_t nonce;                       // 1
-    uint32_t num_points;                  // 2
-    uint32_t num_lines;                   // 3
-    uint32_t num_arcs;                    // 4
-    uint32_t num_text_annotations;        // 5
-    uint32_t num_laser_rays;              // 6
-    uint32_t num_local_points;            // 7
-    uint32_t num_local_lines;             // 8
-    uint32_t num_local_arcs;              // 9
-    uint32_t num_local_text_annotations;  // 10
-    float laser_min_angle;                // 11
-    float laser_max_angle;                // 12
-    float loc_x;                          // 13
-    float loc_y;                          // 14
-    float loc_r;                          // 15
-    char map[32];                         //
-    size_t GetByteLength() const {
-        const size_t len = 15 * 4 + 32 +                       // header fields + map data
-                           num_laser_rays * 4 +                // each ray is uint32_t
-                           num_points * 3 * 4 +                // x, y, color
-                           num_lines * 5 * 4 +                 // x1, y1, x2, y2, color
-                           num_arcs * 6 * 4 +                  // x, y, radius, start_angle, end_angle, color
-                           num_text_annotations * 4 * 4 * 32;  // x, y, color, size, msg
+struct MessageHeader
+{
+    MessageHeader();                     // Move implementation to .cc file
+    uint32_t nonce;                      // 1
+    uint32_t num_points;                 // 2
+    uint32_t num_lines;                  // 3
+    uint32_t num_arcs;                   // 4
+    uint32_t num_text_annotations;       // 5
+    uint32_t num_laser_rays;             // 6
+    uint32_t num_local_points;           // 7
+    uint32_t num_local_lines;            // 8
+    uint32_t num_local_arcs;             // 9
+    uint32_t num_local_text_annotations; // 10
+    float laser_min_angle;               // 11
+    float laser_max_angle;               // 12
+    float loc_x;                         // 13
+    float loc_y;                         // 14
+    float loc_r;                         // 15
+    char map[32];                        //
+    size_t GetByteLength() const
+    {
+        const size_t len = 15 * 4 + 32 +                      // header fields + map data
+                           num_laser_rays * 4 +               // each ray is uint32_t
+                           num_points * 3 * 4 +               // x, y, color
+                           num_lines * 5 * 4 +                // x1, y1, x2, y2, color
+                           num_arcs * 6 * 4 +                 // x, y, radius, start_angle, end_angle, color
+                           num_text_annotations * 4 * 4 * 32; // x, y, color, size, msg
         return len;
     }
 };
 
-struct ColoredTextNative {
+struct ColoredTextNative
+{
     Point2D start;
     uint32_t color;
     float size_em;
     char text[32];
 };
 
-struct DataMessage {
+// Binary frame sent to the browser for each image panel update. The browser
+// dispatches on the leading nonce: kVisNonce (42) -> existing DataMessage,
+// kImageNonce (43) -> ImageFrame.
+struct ImageFrame
+{
+    uint32_t panel_id; // 0 = left, 1 = right (extensible)
+    std::string topic; // source ROS topic name
+    double stamp_sec;  // ROS timestamp in seconds
+    QByteArray jpeg;   // raw JPEG bytes (browser-decodable)
+    QByteArray ToByteArray() const;
+};
+
+struct DataMessage
+{
     MessageHeader header;
     std::vector<uint32_t> laser_scan;
     std::vector<ColoredPoint2D> points;
@@ -113,49 +113,75 @@ struct DataMessage {
     std::vector<ColoredTextNative> text_annotations;
     QByteArray ToByteArray() const;
     static DataMessage FromRosMessages(
-        const LaserScan& laser_msg,
-        const VisualizationMsg& local_msg,
-        const VisualizationMsg& global_msg,
-        const Localization2DMsg& localization_msg);
+        const LaserScan &laser_msg,
+        const VisualizationMsg &local_msg,
+        const VisualizationMsg &global_msg,
+        const Localization2DMsg &localization_msg);
 };
 
-class RobotWebSocket : public QObject {
+class RobotWebSocket : public QObject
+{
     Q_OBJECT
-   public:
+public:
     explicit RobotWebSocket(uint16_t port);
     ~RobotWebSocket();
-    void Send(const VisualizationMsg& local_vis,
-              const VisualizationMsg& global_vis,
-              const LaserScan& laser_scan,
-              const Localization2DMsg& localization);
+    void Send(const VisualizationMsg &local_vis,
+              const VisualizationMsg &global_vis,
+              const LaserScan &laser_scan,
+              const Localization2DMsg &localization);
+    // Enqueue an image frame for transmission to all connected clients.
+    // Safe to call from any thread.
+    void SendImage(uint32_t panel_id,
+                   const std::string &topic,
+                   const QByteArray &jpeg,
+                   double stamp_sec);
+    // Send a foresight planner status update as a JSON text frame to all
+    // connected clients. ``state`` is a short human-readable label (e.g.
+    // "sent", "planning", "complete"), ``verdict`` is "true"/"false"/"" and
+    // ``reflection_id`` is the planner's inner-iteration counter. All fields
+    // may be empty when the value is not yet known.
+    void SendForesightStatus(const QString &state,
+                             const QString &verdict,
+                             const QString &reason,
+                             quint32 reflection_id);
 
-   Q_SIGNALS:
+Q_SIGNALS:
     void closed();
     void SendDataSignal();
+    void SendImageSignal();
+    void SendForesightStatusSignal(QString state, QString verdict,
+                                   QString reason, quint32 reflection_id);
     void SetInitialPoseSignal(float x, float y, float theta, QString map);
     void SetNavGoalSignal(float x, float y, float theta, QString map);
     void ResetNavGoalsSignal();
+    void ForesightCommandSignal(QString text);
 
-   private Q_SLOTS:
+private Q_SLOTS:
     void onNewConnection();
     void processTextMessage(QString message);
     void processBinaryMessage(QByteArray message);
     void socketDisconnected();
     void SendDataSlot();
+    void SendImageSlot();
+    void SendForesightStatusSlot(QString state, QString verdict,
+                                 QString reason, quint32 reflection_id);
 
-   private:
-    void ProcessCallback(const QJsonObject& json);
-    void SendError(const QString& error_val);
+private:
+    void ProcessCallback(const QJsonObject &json);
+    void SendError(const QString &error_val);
 
-   private:
-    QWebSocketServer* ws_server_;
-    std::vector<QWebSocket*> clients_;
+private:
+    QWebSocketServer *ws_server_;
+    std::vector<QWebSocket *> clients_;
 
     QMutex data_mutex_;
     VisualizationMsg local_vis_;
     VisualizationMsg global_vis_;
     LaserScan laser_scan_;
     Localization2DMsg localization_;
+
+    QMutex image_mutex_;
+    std::deque<ImageFrame> image_queue_;
 };
 
-#endif  // ECHOSERVER_H
+#endif // ECHOSERVER_H

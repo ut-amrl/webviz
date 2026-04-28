@@ -14,6 +14,7 @@
 
   <!-- ROS2 Core Dependencies -->
   <depend>rclcpp</depend>
+  <depend>ament_index_cpp</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
@@ -26,6 +27,7 @@
   <depend>libqt5-dev</depend>
   <depend>libgoogle-glog-dev</depend>
   <depend>libgflags-dev</depend>
+  <depend>libopencv-dev</depend>
 
   <!-- Test Dependencies -->
   <test_depend>ament_lint_auto</test_depend>

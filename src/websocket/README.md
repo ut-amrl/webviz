@@ -272,4 +272,4 @@ endif()
 - **Qt5**: WebSockets, Core, Widgets
 - **ROS**: Version-specific packages (roscpp/rclcpp, sensor_msgs, etc.)
 - **AMRL**: amrl_msgs, shared utilities
-- **System**: glog, gflags, Lua 5.1
+- **System**: glog, gflags, Lua 5.2

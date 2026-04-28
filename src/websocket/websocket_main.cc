@@ -19,42 +19,35 @@
  */
 //========================================================================
 #include <QtCore/QCoreApplication>
+#include <QtCore/QString>
 #include <QtCore/QTimer>
-#include <algorithm>
-#include <vector>
 #include <signal.h>
-#include <atomic>
 #include <unistd.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
 
-#ifdef ROS2
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/compressed_image.hpp"
 #include "amrl_msgs/msg/visualization_msg.hpp"
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
-using amrl_msgs::msg::Localization2DMsg;
-using amrl_msgs::msg::VisualizationMsg;
-using geometry_msgs::msg::PoseStamped;
-using geometry_msgs::msg::PoseWithCovarianceStamped;
-using sensor_msgs::msg::LaserScan;
-using std_msgs::msg::Empty;
-#else
-#include "geometry_msgs/PoseStamped.h"
-#include "geometry_msgs/PoseWithCovarianceStamped.h"
-#include "std_msgs/Empty.h"
-#include "sensor_msgs/LaserScan.h"
-#include "amrl_msgs/VisualizationMsg.h"
-#include "amrl_msgs/Localization2DMsg.h"
-using amrl_msgs::Localization2DMsg;
-using amrl_msgs::VisualizationMsg;
-using geometry_msgs::PoseStamped;
-using geometry_msgs::PoseWithCovarianceStamped;
-using sensor_msgs::LaserScan;
-using std_msgs::Empty;
-#endif
+#include "amrl_msgs/msg/foresight_planner_msg.hpp"
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include "gflags/gflags.h"
 #include "glog/logging.h"
@@ -62,13 +55,22 @@ using std_msgs::Empty;
 #include "util/timer.h"
 #include "config_reader/config_reader.h"
 #include "websocket.h"
-#include "ros_compat.h"
 
+using amrl_msgs::msg::ForesightPlannerMsg;
+using amrl_msgs::msg::Localization2DMsg;
+using amrl_msgs::msg::VisualizationMsg;
+using geometry_msgs::msg::PoseStamped;
+using geometry_msgs::msg::PoseWithCovarianceStamped;
+using sensor_msgs::msg::CompressedImage;
+using sensor_msgs::msg::Image;
+using sensor_msgs::msg::LaserScan;
 using std::vector;
+using std_msgs::msg::Empty;
+using std_msgs::msg::String;
 
 DEFINE_double(fps, 10.0, "Max visualization frames rate.");
 DEFINE_double(max_age, 2.0, "Maximum age of a message before it gets dropped.");
-DEFINE_string(config_file, "config/webviz_config.lua", "Name of config file to use");
+DEFINE_string(config_file, "", "Path to config file; defaults to the installed share/webviz/config/webviz_config.lua");
 DECLARE_int32(v);
 
 // Configuration variables using config-reader macros
@@ -106,88 +108,136 @@ CONFIG_BOOL(enable_message_aging, "performance.enable_message_aging");
 CONFIG_BOOL(enable_rate_limiting, "performance.enable_rate_limiting");
 CONFIG_INT(thread_sleep_usec, "performance.thread_sleep_usec");
 
-namespace {
-std::atomic<bool> run_(true);
-vector<VisualizationMsg> vis_msgs_;
-PoseWithCovarianceStamped initial_pose_msg_;
-PoseStamped nav_goal_msg_;
-Localization2DMsg amrl_initial_pose_msg_;
-Localization2DMsg amrl_nav_goal_msg_;
-Empty reset_nav_goals_msg_;
-Localization2DMsg localization_msg_;
-LaserScan laser_scan_;
-NodePtr node_;
-PublisherPtr<PoseWithCovarianceStamped> init_loc_pub_;
-PublisherPtr<Localization2DMsg> amrl_init_loc_pub_;
-PublisherPtr<PoseStamped> nav_goal_pub_;
-PublisherPtr<Localization2DMsg> amrl_nav_goal_pub_;
-PublisherPtr<Empty> reset_nav_goals_pub_;
-bool updates_pending_ = false;
-RobotWebSocket *server_ = nullptr;
+// Image panel configuration. Two panels (left/right) defined in lua.
+CONFIG_STRING(left_image_topic, "image_panels.left.topic");
+CONFIG_STRING(left_image_msg_type, "image_panels.left.msg_type");
+CONFIG_INT(left_image_queue_size, "image_panels.left.queue_size");
+CONFIG_STRING(right_image_topic, "image_panels.right.topic");
+CONFIG_STRING(right_image_msg_type, "image_panels.right.msg_type");
+CONFIG_INT(right_image_queue_size, "image_panels.right.queue_size");
 
-// Track current subscriptions for dynamic reconfiguration
-#ifdef ROS2
-SubscriberPtr<LaserScan> laser_sub_;
-SubscriberPtr<VisualizationMsg> vis_sub_;
-SubscriberPtr<Localization2DMsg> localization_sub_;
-#else
-SubscriberPtr<LaserScan> laser_sub_;
-SubscriberPtr<VisualizationMsg> vis_sub_;
-SubscriberPtr<Localization2DMsg> localization_sub_;
-#endif
+CONFIG_DOUBLE(image_max_rate_hz, "image_streaming.max_rate_hz");
+CONFIG_INT(image_jpeg_quality, "image_streaming.jpeg_quality");
 
-// Track current topic names to detect changes
-std::string current_laser_topic_;
-std::string current_viz_topic_;
-std::string current_loc_topic_;
+// Foresight planner topic configuration. The webviz UI publishes the typed
+// goal_command on ``command_topic`` and listens for ``ForesightPlannerMsg``
+// updates on ``status_topic`` (verdict + reason + reflection_id) which it
+// forwards to the browser.
+CONFIG_STRING(foresight_command_topic, "foresight_planner.command_topic");
+CONFIG_INT(foresight_command_topic_qos, "foresight_planner.command_topic_qos");
+CONFIG_STRING(foresight_status_topic, "foresight_planner.status_topic");
+CONFIG_INT(foresight_status_topic_qos, "foresight_planner.status_topic_qos");
 
-// Track current configuration for comprehensive monitoring
-struct CurrentConfig {
-    // Subscriber topics
-    std::string laser_topic;
-    std::string viz_topic;
-    std::string loc_topic;
+namespace
+{
+    std::atomic<bool> run_(true);
+    vector<VisualizationMsg> vis_msgs_;
+    PoseWithCovarianceStamped initial_pose_msg_;
+    PoseStamped nav_goal_msg_;
+    Localization2DMsg amrl_initial_pose_msg_;
+    Localization2DMsg amrl_nav_goal_msg_;
+    Empty reset_nav_goals_msg_;
+    Localization2DMsg localization_msg_;
+    LaserScan laser_scan_;
+    rclcpp::Node::SharedPtr node_;
+    rclcpp::Publisher<PoseWithCovarianceStamped>::SharedPtr init_loc_pub_;
+    rclcpp::Publisher<Localization2DMsg>::SharedPtr amrl_init_loc_pub_;
+    rclcpp::Publisher<PoseStamped>::SharedPtr nav_goal_pub_;
+    rclcpp::Publisher<Localization2DMsg>::SharedPtr amrl_nav_goal_pub_;
+    rclcpp::Publisher<Empty>::SharedPtr reset_nav_goals_pub_;
+    bool updates_pending_ = false;
+    RobotWebSocket *server_ = nullptr;
 
-    // Publisher topics
-    std::string init_pose_std_topic;
-    std::string nav_goal_std_topic;
-    std::string init_pose_amrl_topic;
-    std::string nav_goal_amrl_topic;
-    std::string reset_goals_topic;
+    rclcpp::Subscription<LaserScan>::SharedPtr laser_sub_;
+    rclcpp::Subscription<VisualizationMsg>::SharedPtr vis_sub_;
+    rclcpp::Subscription<Localization2DMsg>::SharedPtr localization_sub_;
 
-    // Frames
-    std::string robot_frame;
-    std::string world_frame;
+    // Track current configuration for comprehensive monitoring
+    struct CurrentConfig
+    {
+        // Subscriber topics
+        std::string laser_topic;
+        std::string viz_topic;
+        std::string loc_topic;
 
-    // WebSocket settings
-    int websocket_port;
-    double update_rate_hz;
-    double message_timeout_sec;
+        // Publisher topics
+        std::string init_pose_std_topic;
+        std::string nav_goal_std_topic;
+        std::string init_pose_amrl_topic;
+        std::string nav_goal_amrl_topic;
+        std::string reset_goals_topic;
 
-    // Queue sizes
-    int laser_queue_size;
-    int viz_queue_size;
-    int loc_queue_size;
-    int pub_queue_size;
-};
+        // Frames
+        std::string robot_frame;
+        std::string world_frame;
 
-CurrentConfig current_config_;
-}  // namespace
+        // WebSocket settings
+        int websocket_port;
+        double update_rate_hz;
+        double message_timeout_sec;
 
-void LocalizationCallback(const Localization2DMsg &msg) {
+        // Queue sizes
+        int laser_queue_size;
+        int viz_queue_size;
+        int loc_queue_size;
+        int pub_queue_size;
+
+        // Image panels and foresight planner.
+        std::string left_image_topic;
+        std::string left_image_msg_type;
+        int left_image_queue_size;
+        std::string right_image_topic;
+        std::string right_image_msg_type;
+        int right_image_queue_size;
+        double image_max_rate_hz;
+        int image_jpeg_quality;
+        std::string foresight_command_topic;
+        int foresight_command_topic_qos;
+        std::string foresight_status_topic;
+        int foresight_status_topic_qos;
+    };
+
+    CurrentConfig current_config_;
+
+    // Per-panel image streaming state.
+    struct ImagePanel
+    {
+        std::string id;    // "left" / "right"; matches lua key
+        uint32_t panel_id; // 0 / 1; sent over the wire
+        std::string topic;
+        std::string msg_type; // "compressed" or "raw"
+        int queue_size = 1;
+        rclcpp::SubscriptionBase::SharedPtr sub;
+        double last_send_sec = 0.0;
+    };
+    std::vector<ImagePanel> image_panels_;
+
+    // Foresight planner topic interfaces. Webviz only publishes the goal_command
+    // String onto ``foresight_command_pub_``; status updates flow back through
+    // ``foresight_status_sub_`` from the planner / graph_navigation.
+    rclcpp::Publisher<String>::SharedPtr foresight_command_pub_;
+    rclcpp::Subscription<ForesightPlannerMsg>::SharedPtr foresight_status_sub_;
+} // namespace
+
+void LocalizationCallback(const Localization2DMsg &msg)
+{
     localization_msg_ = msg;
 }
 
-void LaserCallback(const LaserScan &msg) {
+void LaserCallback(const LaserScan &msg)
+{
     laser_scan_ = msg;
     updates_pending_ = true;
 }
 
-void VisualizationCallback(const VisualizationMsg &msg) {
+void VisualizationCallback(const VisualizationMsg &msg)
+{
     static bool warning_showed_ = false;
     if (msg.header.frame_id != CONFIG_robot_frame &&
-        msg.header.frame_id != CONFIG_world_frame) {
-        if (!warning_showed_) {
+        msg.header.frame_id != CONFIG_world_frame)
+    {
+        if (!warning_showed_)
+        {
             fprintf(stderr,
                     "WARNING: Ignoring visualization for unknown frame '%s'."
                     " This message prints only once.\n",
@@ -199,25 +249,31 @@ void VisualizationCallback(const VisualizationMsg &msg) {
     auto prev_msg =
         std::find_if(vis_msgs_.begin(),
                      vis_msgs_.end(),
-                     [&msg](const VisualizationMsg &m) {
+                     [&msg](const VisualizationMsg &m)
+                     {
                          return m.ns == msg.ns;
                      });
-    if (prev_msg == vis_msgs_.end()) {
+    if (prev_msg == vis_msgs_.end())
+    {
         vis_msgs_.push_back(msg);
-    } else {
+    }
+    else
+    {
         *prev_msg = msg;
     }
     updates_pending_ = true;
 }
 
 template <typename T>
-void MergeVector(const std::vector<T> &v1, std::vector<T> *v2) {
+void MergeVector(const std::vector<T> &v1, std::vector<T> *v2)
+{
     v2->insert(v2->end(), v1.begin(), v1.end());
 }
 
 // Merge message m1 into m2.
 void MergeMessage(const VisualizationMsg &m1,
-                  VisualizationMsg *m2_ptr) {
+                  VisualizationMsg *m2_ptr)
+{
     VisualizationMsg &m2 = *m2_ptr;
     MergeVector(m1.points, &m2.points);
     MergeVector(m1.lines, &m2.lines);
@@ -225,54 +281,44 @@ void MergeMessage(const VisualizationMsg &m1,
     MergeVector(m1.text_annotations, &m2.text_annotations);
 }
 
-void DropOldMessages() {
-    const auto now = GET_TIME();
+void DropOldMessages()
+{
+    const auto now = rclcpp::Clock().now();
     const double max_age = CONFIG_message_timeout_sec;
-#ifdef ROS2
-    if ((now - rclcpp::Time(laser_scan_.header.stamp)).seconds() > max_age) {
-        laser_scan_.header.stamp = ZERO_TIME();
+    if ((now - rclcpp::Time(laser_scan_.header.stamp)).seconds() > max_age)
+    {
+        laser_scan_.header.stamp = rclcpp::Time(0, 0);
     }
     std::remove_if(
         vis_msgs_.begin(),
         vis_msgs_.end(),
-        [&now, max_age](const VisualizationMsg &m) {
+        [&now, max_age](const VisualizationMsg &m)
+        {
             return ((now - rclcpp::Time(m.header.stamp)).seconds() > max_age);
         });
-#else
-    if ((now - laser_scan_.header.stamp).toSec() > max_age) {
-        laser_scan_.header.stamp = ZERO_TIME();
-    }
-    std::remove_if(
-        vis_msgs_.begin(),
-        vis_msgs_.end(),
-        [&now, max_age](const VisualizationMsg &m) {
-            return ((now - m.header.stamp).toSec() > max_age);
-        });
-#endif
 }
 
-void SendUpdate() {
-    if (server_ == nullptr || !updates_pending_) {
+void SendUpdate()
+{
+    if (server_ == nullptr || !updates_pending_)
+    {
         return;
     }
-    // DropOldMessages();
     updates_pending_ = false;
-#ifdef ROS2
-    if (laser_scan_.header.stamp.sec == 0 && vis_msgs_.empty()) {
+    if (laser_scan_.header.stamp.sec == 0 && vis_msgs_.empty())
+    {
         return;
     }
-#else
-    if (laser_scan_.header.stamp.toSec() == 0 && vis_msgs_.empty()) {
-        return;
-    }
-#endif
     VisualizationMsg local_msgs;
     VisualizationMsg global_msgs;
-    for (const VisualizationMsg &m : vis_msgs_) {
-        // std::cout << m << std::endl;
-        if (m.header.frame_id == CONFIG_world_frame) {
+    for (const VisualizationMsg &m : vis_msgs_)
+    {
+        if (m.header.frame_id == CONFIG_world_frame)
+        {
             MergeMessage(m, &global_msgs);
-        } else {
+        }
+        else
+        {
             MergeMessage(m, &local_msgs);
         }
     }
@@ -282,90 +328,305 @@ void SendUpdate() {
                   localization_msg_);
 }
 
-void SetInitialPose(float x, float y, float theta, QString map) {
-    if (FLAGS_v > 0) {
+void SetInitialPose(float x, float y, float theta, QString map)
+{
+    if (FLAGS_v > 0)
+    {
         printf("Set initial pose: %s %f,%f, %f\n",
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
-    initial_pose_msg_.header.stamp = GET_TIME();
+    initial_pose_msg_.header.stamp = rclcpp::Clock().now();
     initial_pose_msg_.pose.pose.position.x = x;
     initial_pose_msg_.pose.pose.position.y = y;
     initial_pose_msg_.pose.pose.orientation.w = cos(0.5 * theta);
     initial_pose_msg_.pose.pose.orientation.z = sin(0.5 * theta);
-    PUBLISH(init_loc_pub_, initial_pose_msg_);
-    amrl_initial_pose_msg_.header.stamp = GET_TIME();
+    init_loc_pub_->publish(initial_pose_msg_);
+    amrl_initial_pose_msg_.header.stamp = rclcpp::Clock().now();
     amrl_initial_pose_msg_.map = map.toStdString();
     amrl_initial_pose_msg_.pose.x = x;
     amrl_initial_pose_msg_.pose.y = y;
     amrl_initial_pose_msg_.pose.theta = theta;
-    PUBLISH(amrl_init_loc_pub_, amrl_initial_pose_msg_);
+    amrl_init_loc_pub_->publish(amrl_initial_pose_msg_);
 }
 
-void ResetNavGoals() {
-    if (FLAGS_v > 0) {
+void ResetNavGoals()
+{
+    if (FLAGS_v > 0)
+    {
         printf("Reset nav goals.\n");
     }
-    PUBLISH(reset_nav_goals_pub_, reset_nav_goals_msg_);
+    reset_nav_goals_pub_->publish(reset_nav_goals_msg_);
 }
 
-void SetNavGoal(float x, float y, float theta, QString map) {
-    if (FLAGS_v > 0) {
+void SetNavGoal(float x, float y, float theta, QString map)
+{
+    if (FLAGS_v > 0)
+    {
         printf("Set nav goal: %s %f,%f, %f\n",
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
-    nav_goal_msg_.header.stamp = GET_TIME();
+    nav_goal_msg_.header.stamp = rclcpp::Clock().now();
     nav_goal_msg_.pose.position.x = x;
     nav_goal_msg_.pose.position.y = y;
     nav_goal_msg_.pose.orientation.w = cos(0.5 * theta);
     nav_goal_msg_.pose.orientation.z = sin(0.5 * theta);
-    PUBLISH(nav_goal_pub_, nav_goal_msg_);
-    amrl_nav_goal_msg_.header.stamp = GET_TIME();
+    nav_goal_pub_->publish(nav_goal_msg_);
+    amrl_nav_goal_msg_.header.stamp = rclcpp::Clock().now();
     amrl_nav_goal_msg_.map = map.toStdString();
     amrl_nav_goal_msg_.pose.x = x;
     amrl_nav_goal_msg_.pose.y = y;
     amrl_nav_goal_msg_.pose.theta = theta;
-    PUBLISH(amrl_nav_goal_pub_, amrl_nav_goal_msg_);
+    amrl_nav_goal_pub_->publish(amrl_nav_goal_msg_);
 }
 
-// Function to create or recreate ROS subscriptions
-void CreateSubscriptions() {
-    if (FLAGS_v > 0) {
+// Encode a sensor_msgs::Image into a JPEG QByteArray. Supports rgb8, bgr8,
+// mono8 encodings. Other encodings are rejected with a one-time warning.
+static bool EncodeImageToJpeg(const Image &msg, QByteArray *out)
+{
+    static bool warned_unknown_encoding = false;
+    int cv_type;
+    bool need_rgb_to_bgr = false;
+    if (msg.encoding == "bgr8")
+    {
+        cv_type = CV_8UC3;
+    }
+    else if (msg.encoding == "rgb8")
+    {
+        cv_type = CV_8UC3;
+        need_rgb_to_bgr = true;
+    }
+    else if (msg.encoding == "mono8")
+    {
+        cv_type = CV_8UC1;
+    }
+    else
+    {
+        if (!warned_unknown_encoding)
+        {
+            fprintf(stderr,
+                    "WARNING: Unsupported image encoding '%s' on raw image "
+                    "topic. Supported: rgb8, bgr8, mono8. This message "
+                    "prints only once.\n",
+                    msg.encoding.c_str());
+            warned_unknown_encoding = true;
+        }
+        return false;
+    }
+
+    cv::Mat view(msg.height, msg.width, cv_type,
+                 const_cast<uint8_t *>(msg.data.data()), msg.step);
+    cv::Mat encoded_input;
+    if (need_rgb_to_bgr)
+    {
+        cv::cvtColor(view, encoded_input, cv::COLOR_RGB2BGR);
+    }
+    else
+    {
+        encoded_input = view;
+    }
+
+    std::vector<uint8_t> jpeg_bytes;
+    const std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY,
+                                     CONFIG_image_jpeg_quality};
+    if (!cv::imencode(".jpg", encoded_input, jpeg_bytes, params))
+    {
+        fprintf(stderr, "WARNING: cv::imencode failed for raw image.\n");
+        return false;
+    }
+    out->resize(static_cast<int>(jpeg_bytes.size()));
+    memcpy(out->data(), jpeg_bytes.data(), jpeg_bytes.size());
+    return true;
+}
+
+// Drop frames that arrive faster than CONFIG_image_max_rate_hz. Returns true
+// if the frame should be forwarded to the websocket.
+static bool ShouldForwardImage(ImagePanel *panel)
+{
+    if (CONFIG_image_max_rate_hz <= 0.0)
+        return true;
+    const double now_sec =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const double min_interval = 1.0 / CONFIG_image_max_rate_hz;
+    if (now_sec - panel->last_send_sec < min_interval)
+        return false;
+    panel->last_send_sec = now_sec;
+    return true;
+}
+
+static void OnCompressedImage(ImagePanel *panel,
+                              const CompressedImage::SharedPtr msg)
+{
+    if (server_ == nullptr)
+        return;
+    if (!ShouldForwardImage(panel))
+        return;
+    QByteArray jpeg(reinterpret_cast<const char *>(msg->data.data()),
+                    static_cast<int>(msg->data.size()));
+    const double stamp =
+        msg->header.stamp.sec + 1e-9 * msg->header.stamp.nanosec;
+    server_->SendImage(panel->panel_id, panel->topic, jpeg, stamp);
+}
+
+static void OnRawImage(ImagePanel *panel, const Image::SharedPtr msg)
+{
+    if (server_ == nullptr)
+        return;
+    if (!ShouldForwardImage(panel))
+        return;
+    QByteArray jpeg;
+    if (!EncodeImageToJpeg(*msg, &jpeg))
+        return;
+    const double stamp =
+        msg->header.stamp.sec + 1e-9 * msg->header.stamp.nanosec;
+    server_->SendImage(panel->panel_id, panel->topic, jpeg, stamp);
+}
+
+// (Re)build all image-panel subscriptions from the current config.
+static void CreateImagePanels()
+{
+    image_panels_.clear();
+    struct Cfg
+    {
+        std::string id;
+        uint32_t panel_id;
+        std::string topic;
+        std::string msg_type;
+        int qsize;
+    };
+    const std::vector<Cfg> cfg = {
+        {"left", 0, CONFIG_left_image_topic, CONFIG_left_image_msg_type,
+         CONFIG_left_image_queue_size},
+        {"right", 1, CONFIG_right_image_topic, CONFIG_right_image_msg_type,
+         CONFIG_right_image_queue_size},
+    };
+    image_panels_.reserve(cfg.size());
+    for (const auto &c : cfg)
+    {
+        if (c.topic.empty())
+            continue;
+        image_panels_.push_back({c.id, c.panel_id, c.topic, c.msg_type,
+                                 c.qsize, nullptr, 0.0});
+        ImagePanel *panel = &image_panels_.back();
+        if (c.msg_type == "compressed")
+        {
+            panel->sub = node_->create_subscription<CompressedImage>(
+                c.topic, c.qsize,
+                [panel](const CompressedImage::SharedPtr msg)
+                {
+                    OnCompressedImage(panel, msg);
+                });
+        }
+        else if (c.msg_type == "raw")
+        {
+            panel->sub = node_->create_subscription<Image>(
+                c.topic, c.qsize,
+                [panel](const Image::SharedPtr msg)
+                {
+                    OnRawImage(panel, msg);
+                });
+        }
+        else
+        {
+            fprintf(stderr,
+                    "ERROR: image_panels.%s.msg_type='%s' must be "
+                    "'compressed' or 'raw'.\n",
+                    c.id.c_str(), c.msg_type.c_str());
+            image_panels_.pop_back();
+            continue;
+        }
+        if (FLAGS_v > 0)
+        {
+            printf("  Image panel '%s' subscribed: %s [%s]\n",
+                   c.id.c_str(), c.topic.c_str(), c.msg_type.c_str());
+        }
+    }
+}
+
+// Forward a ForesightPlannerMsg from ROS to all websocket clients.
+static void OnForesightStatus(const ForesightPlannerMsg::SharedPtr msg)
+{
+    fprintf(stderr, "[fs] cb verdict=%d reason='%s' refl=%u server=%p\n",
+            (int)msg->verdict.data, msg->reason.data.c_str(),
+            msg->reflection_id, (void *)server_);
+    if (server_ == nullptr)
+        return;
+    const QString verdict = msg->verdict.data ? "true" : "false";
+    const QString reason = QString::fromStdString(msg->reason.data);
+    const quint32 reflection_id = static_cast<quint32>(msg->reflection_id);
+    const QString state = msg->verdict.data ? "complete" : "planning";
+    server_->SendForesightStatus(state, verdict, reason, reflection_id);
+}
+
+// Build (or rebuild) the foresight publisher + status subscription.
+static void CreateForesightPlannerInterfaces()
+{
+    foresight_command_pub_ = node_->create_publisher<String>(
+        CONFIG_foresight_command_topic, CONFIG_foresight_command_topic_qos);
+    foresight_status_sub_ = node_->create_subscription<ForesightPlannerMsg>(
+        CONFIG_foresight_status_topic, CONFIG_foresight_status_topic_qos,
+        [](const ForesightPlannerMsg::SharedPtr msg)
+        {
+            OnForesightStatus(msg);
+        });
+    if (FLAGS_v > 0)
+    {
+        printf("  Foresight command topic: %s\n",
+               CONFIG_foresight_command_topic.c_str());
+        printf("  Foresight status topic:  %s\n",
+               CONFIG_foresight_status_topic.c_str());
+    }
+}
+
+// Slot wired to RobotWebSocket::ForesightCommandSignal. Runs on the ROS
+// thread (Qt::QueuedConnection is set up in RosThread). Publishes the
+// goal_command as a String on ``foresight_command_topic``; replies flow back
+// asynchronously via the foresight_status subscription.
+static void HandleForesightCommand(QString text)
+{
+    if (foresight_command_pub_)
+    {
+        String msg;
+        msg.data = text.toStdString();
+        foresight_command_pub_->publish(msg);
+    }
+    if (server_)
+    {
+        // Immediately echo a "sent" status to acknowledge receipt; downstream
+        // status updates from the planner will overwrite it.
+        server_->SendForesightStatus("sent", "", "", 0);
+    }
+}
+
+void CreateSubscriptions()
+{
+    if (FLAGS_v > 0)
+    {
         printf("Creating ROS subscriptions:\n");
         printf("  Laser: %s\n", CONFIG_laser_topic.c_str());
         printf("  Visualization: %s\n", CONFIG_viz_topic.c_str());
         printf("  Localization: %s\n", CONFIG_loc_topic.c_str());
     }
 
-#ifdef ROS2
-    // ROS2 callback setup with lambda wrappers
-    auto laser_callback = [](const LaserScan::SharedPtr msg) {
-        LaserCallback(*msg);
-    };
-    auto vis_callback = [](const VisualizationMsg::SharedPtr msg) {
-        VisualizationCallback(*msg);
-    };
-    auto loc_callback = [](const Localization2DMsg::SharedPtr msg) {
-        LocalizationCallback(*msg);
-    };
-
-    laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, laser_callback);
-    vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, vis_callback);
-    localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, loc_callback);
-#else
-    laser_sub_ = CREATE_SUBSCRIBER(node_, LaserScan, CONFIG_laser_topic, CONFIG_laser_queue_size, &LaserCallback);
-    vis_sub_ = CREATE_SUBSCRIBER(node_, VisualizationMsg, CONFIG_viz_topic, CONFIG_viz_queue_size, &VisualizationCallback);
-    localization_sub_ = CREATE_SUBSCRIBER(node_, Localization2DMsg, CONFIG_loc_topic, CONFIG_loc_queue_size, &LocalizationCallback);
-#endif
-
-    // Update tracked topic names
-    current_laser_topic_ = CONFIG_laser_topic;
-    current_viz_topic_ = CONFIG_viz_topic;
-    current_loc_topic_ = CONFIG_loc_topic;
+    laser_sub_ = node_->create_subscription<LaserScan>(
+        CONFIG_laser_topic, CONFIG_laser_queue_size,
+        [](const LaserScan::SharedPtr msg)
+        { LaserCallback(*msg); });
+    vis_sub_ = node_->create_subscription<VisualizationMsg>(
+        CONFIG_viz_topic, CONFIG_viz_queue_size,
+        [](const VisualizationMsg::SharedPtr msg)
+        { VisualizationCallback(*msg); });
+    localization_sub_ = node_->create_subscription<Localization2DMsg>(
+        CONFIG_loc_topic, CONFIG_loc_queue_size,
+        [](const Localization2DMsg::SharedPtr msg)
+        { LocalizationCallback(*msg); });
 }
 
-// Function to create or recreate ROS publishers
-void CreatePublishers() {
-    if (FLAGS_v > 0) {
+void CreatePublishers()
+{
+    if (FLAGS_v > 0)
+    {
         printf("Creating ROS publishers:\n");
         printf("  Initial pose (std): %s\n", CONFIG_init_pose_std_topic.c_str());
         printf("  Nav goal (std): %s\n", CONFIG_nav_goal_std_topic.c_str());
@@ -374,15 +635,20 @@ void CreatePublishers() {
         printf("  Reset goals: %s\n", CONFIG_reset_goals_topic.c_str());
     }
 
-    init_loc_pub_ = CREATE_PUBLISHER(node_, PoseWithCovarianceStamped, CONFIG_init_pose_std_topic, CONFIG_pub_queue_size);
-    nav_goal_pub_ = CREATE_PUBLISHER(node_, PoseStamped, CONFIG_nav_goal_std_topic, CONFIG_pub_queue_size);
-    amrl_init_loc_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_init_pose_amrl_topic, CONFIG_pub_queue_size);
-    amrl_nav_goal_pub_ = CREATE_PUBLISHER(node_, Localization2DMsg, CONFIG_nav_goal_amrl_topic, CONFIG_pub_queue_size);
-    reset_nav_goals_pub_ = CREATE_PUBLISHER(node_, Empty, CONFIG_reset_goals_topic, CONFIG_pub_queue_size);
+    init_loc_pub_ = node_->create_publisher<PoseWithCovarianceStamped>(
+        CONFIG_init_pose_std_topic, CONFIG_pub_queue_size);
+    nav_goal_pub_ = node_->create_publisher<PoseStamped>(
+        CONFIG_nav_goal_std_topic, CONFIG_pub_queue_size);
+    amrl_init_loc_pub_ = node_->create_publisher<Localization2DMsg>(
+        CONFIG_init_pose_amrl_topic, CONFIG_pub_queue_size);
+    amrl_nav_goal_pub_ = node_->create_publisher<Localization2DMsg>(
+        CONFIG_nav_goal_amrl_topic, CONFIG_pub_queue_size);
+    reset_nav_goals_pub_ = node_->create_publisher<Empty>(
+        CONFIG_reset_goals_topic, CONFIG_pub_queue_size);
 }
 
-// Function to capture current configuration state
-void CaptureCurrentConfig() {
+void CaptureCurrentConfig()
+{
     current_config_.laser_topic = CONFIG_laser_topic;
     current_config_.viz_topic = CONFIG_viz_topic;
     current_config_.loc_topic = CONFIG_loc_topic;
@@ -404,123 +670,196 @@ void CaptureCurrentConfig() {
     current_config_.viz_queue_size = CONFIG_viz_queue_size;
     current_config_.loc_queue_size = CONFIG_loc_queue_size;
     current_config_.pub_queue_size = CONFIG_pub_queue_size;
+
+    current_config_.left_image_topic = CONFIG_left_image_topic;
+    current_config_.left_image_msg_type = CONFIG_left_image_msg_type;
+    current_config_.left_image_queue_size = CONFIG_left_image_queue_size;
+    current_config_.right_image_topic = CONFIG_right_image_topic;
+    current_config_.right_image_msg_type = CONFIG_right_image_msg_type;
+    current_config_.right_image_queue_size = CONFIG_right_image_queue_size;
+    current_config_.image_max_rate_hz = CONFIG_image_max_rate_hz;
+    current_config_.image_jpeg_quality = CONFIG_image_jpeg_quality;
+    current_config_.foresight_command_topic = CONFIG_foresight_command_topic;
+    current_config_.foresight_command_topic_qos =
+        CONFIG_foresight_command_topic_qos;
+    current_config_.foresight_status_topic = CONFIG_foresight_status_topic;
+    current_config_.foresight_status_topic_qos =
+        CONFIG_foresight_status_topic_qos;
 }
 
-// Comprehensive configuration monitoring and updating
-bool CheckAndUpdateConfiguration() {
+bool CheckAndUpdateConfiguration()
+{
     bool subscribers_changed = false;
     bool publishers_changed = false;
     bool other_changed = false;
 
-    // Check subscriber topics
     if (current_config_.laser_topic != CONFIG_laser_topic ||
         current_config_.viz_topic != CONFIG_viz_topic ||
-        current_config_.loc_topic != CONFIG_loc_topic) {
+        current_config_.loc_topic != CONFIG_loc_topic)
+    {
         subscribers_changed = true;
     }
 
-    // Check publisher topics
     if (current_config_.init_pose_std_topic != CONFIG_init_pose_std_topic ||
         current_config_.nav_goal_std_topic != CONFIG_nav_goal_std_topic ||
         current_config_.init_pose_amrl_topic != CONFIG_init_pose_amrl_topic ||
         current_config_.nav_goal_amrl_topic != CONFIG_nav_goal_amrl_topic ||
-        current_config_.reset_goals_topic != CONFIG_reset_goals_topic) {
+        current_config_.reset_goals_topic != CONFIG_reset_goals_topic)
+    {
         publishers_changed = true;
     }
 
-    // Check other parameters (frames, rates, etc.)
     if (current_config_.robot_frame != CONFIG_robot_frame ||
         current_config_.world_frame != CONFIG_world_frame ||
         current_config_.update_rate_hz != CONFIG_update_rate_hz ||
         current_config_.message_timeout_sec != CONFIG_message_timeout_sec ||
-        current_config_.websocket_port != CONFIG_websocket_port) {
+        current_config_.websocket_port != CONFIG_websocket_port)
+    {
         other_changed = true;
     }
 
-    if (subscribers_changed || publishers_changed || other_changed) {
-        if (FLAGS_v > 0) {
+    if (current_config_.left_image_topic != CONFIG_left_image_topic ||
+        current_config_.left_image_msg_type != CONFIG_left_image_msg_type ||
+        current_config_.left_image_queue_size != CONFIG_left_image_queue_size ||
+        current_config_.right_image_topic != CONFIG_right_image_topic ||
+        current_config_.right_image_msg_type != CONFIG_right_image_msg_type ||
+        current_config_.right_image_queue_size != CONFIG_right_image_queue_size ||
+        current_config_.image_max_rate_hz != CONFIG_image_max_rate_hz ||
+        current_config_.image_jpeg_quality != CONFIG_image_jpeg_quality ||
+        current_config_.foresight_command_topic != CONFIG_foresight_command_topic ||
+        current_config_.foresight_command_topic_qos !=
+            CONFIG_foresight_command_topic_qos ||
+        current_config_.foresight_status_topic !=
+            CONFIG_foresight_status_topic ||
+        current_config_.foresight_status_topic_qos !=
+            CONFIG_foresight_status_topic_qos)
+    {
+        other_changed = true;
+    }
+
+    if (subscribers_changed || publishers_changed || other_changed)
+    {
+        if (FLAGS_v > 0)
+        {
             printf("=== WebViz Configuration Change Detected ===\n");
         }
 
-        // Handle subscriber changes
-        if (subscribers_changed) {
-            if (FLAGS_v > 0) {
+        if (subscribers_changed)
+        {
+            if (FLAGS_v > 0)
+            {
                 printf("Updating ROS topic subscriptions:\n");
-                if (current_config_.laser_topic != CONFIG_laser_topic) {
+                if (current_config_.laser_topic != CONFIG_laser_topic)
+                {
                     printf("  Laser scan topic: '%s' -> '%s'\n", current_config_.laser_topic.c_str(), CONFIG_laser_topic.c_str());
                 }
-                if (current_config_.viz_topic != CONFIG_viz_topic) {
+                if (current_config_.viz_topic != CONFIG_viz_topic)
+                {
                     printf("  Visualization topic: '%s' -> '%s'\n", current_config_.viz_topic.c_str(), CONFIG_viz_topic.c_str());
                 }
-                if (current_config_.loc_topic != CONFIG_loc_topic) {
+                if (current_config_.loc_topic != CONFIG_loc_topic)
+                {
                     printf("  Localization topic: '%s' -> '%s'\n", current_config_.loc_topic.c_str(), CONFIG_loc_topic.c_str());
                 }
             }
 
-            // Reset and recreate subscriptions
-#ifdef ROS2
             laser_sub_.reset();
             vis_sub_.reset();
             localization_sub_.reset();
-#else
-            laser_sub_.shutdown();
-            vis_sub_.shutdown();
-            localization_sub_.shutdown();
-#endif
             CreateSubscriptions();
         }
 
-        // Handle publisher changes
-        if (publishers_changed) {
-            if (FLAGS_v > 0) {
+        if (publishers_changed)
+        {
+            if (FLAGS_v > 0)
+            {
                 printf("Updating ROS topic publishers:\n");
-                if (current_config_.init_pose_std_topic != CONFIG_init_pose_std_topic) {
+                if (current_config_.init_pose_std_topic != CONFIG_init_pose_std_topic)
+                {
                     printf("  Initial pose (std): '%s' -> '%s'\n", current_config_.init_pose_std_topic.c_str(), CONFIG_init_pose_std_topic.c_str());
                 }
-                if (current_config_.nav_goal_std_topic != CONFIG_nav_goal_std_topic) {
+                if (current_config_.nav_goal_std_topic != CONFIG_nav_goal_std_topic)
+                {
                     printf("  Nav goal (std): '%s' -> '%s'\n", current_config_.nav_goal_std_topic.c_str(), CONFIG_nav_goal_std_topic.c_str());
                 }
-                if (current_config_.init_pose_amrl_topic != CONFIG_init_pose_amrl_topic) {
+                if (current_config_.init_pose_amrl_topic != CONFIG_init_pose_amrl_topic)
+                {
                     printf("  Initial pose (AMRL): '%s' -> '%s'\n", current_config_.init_pose_amrl_topic.c_str(), CONFIG_init_pose_amrl_topic.c_str());
                 }
-                if (current_config_.nav_goal_amrl_topic != CONFIG_nav_goal_amrl_topic) {
+                if (current_config_.nav_goal_amrl_topic != CONFIG_nav_goal_amrl_topic)
+                {
                     printf("  Nav goal (AMRL): '%s' -> '%s'\n", current_config_.nav_goal_amrl_topic.c_str(), CONFIG_nav_goal_amrl_topic.c_str());
                 }
-                if (current_config_.reset_goals_topic != CONFIG_reset_goals_topic) {
+                if (current_config_.reset_goals_topic != CONFIG_reset_goals_topic)
+                {
                     printf("  Reset goals: '%s' -> '%s'\n", current_config_.reset_goals_topic.c_str(), CONFIG_reset_goals_topic.c_str());
                 }
             }
 
-            // Reset and recreate publishers (ROS handles cleanup automatically)
             CreatePublishers();
         }
 
-        // Handle other parameter changes
-        if (other_changed) {
-            if (FLAGS_v > 0) {
+        if (other_changed)
+        {
+            if (FLAGS_v > 0)
+            {
                 printf("Other configuration updates:\n");
-                if (current_config_.robot_frame != CONFIG_robot_frame) {
+                if (current_config_.robot_frame != CONFIG_robot_frame)
+                {
                     printf("  Robot frame: '%s' -> '%s'\n", current_config_.robot_frame.c_str(), CONFIG_robot_frame.c_str());
                 }
-                if (current_config_.world_frame != CONFIG_world_frame) {
+                if (current_config_.world_frame != CONFIG_world_frame)
+                {
                     printf("  World frame: '%s' -> '%s'\n", current_config_.world_frame.c_str(), CONFIG_world_frame.c_str());
                 }
-                if (current_config_.update_rate_hz != CONFIG_update_rate_hz) {
+                if (current_config_.update_rate_hz != CONFIG_update_rate_hz)
+                {
                     printf("  Update rate: %.1f Hz -> %.1f Hz\n", current_config_.update_rate_hz, CONFIG_update_rate_hz);
                 }
-                if (current_config_.message_timeout_sec != CONFIG_message_timeout_sec) {
+                if (current_config_.message_timeout_sec != CONFIG_message_timeout_sec)
+                {
                     printf("  Message timeout: %.1f s -> %.1f s\n", current_config_.message_timeout_sec, CONFIG_message_timeout_sec);
                 }
-                if (current_config_.websocket_port != CONFIG_websocket_port) {
+                if (current_config_.websocket_port != CONFIG_websocket_port)
+                {
                     printf("  WebSocket port: %d -> %d (requires restart)\n", current_config_.websocket_port, CONFIG_websocket_port);
                 }
             }
+            // Rebuild image panels if any of their fields changed.
+            if (current_config_.left_image_topic != CONFIG_left_image_topic ||
+                current_config_.left_image_msg_type !=
+                    CONFIG_left_image_msg_type ||
+                current_config_.left_image_queue_size !=
+                    CONFIG_left_image_queue_size ||
+                current_config_.right_image_topic != CONFIG_right_image_topic ||
+                current_config_.right_image_msg_type !=
+                    CONFIG_right_image_msg_type ||
+                current_config_.right_image_queue_size !=
+                    CONFIG_right_image_queue_size)
+            {
+                if (FLAGS_v > 0)
+                    printf("  Rebuilding image panel subscriptions.\n");
+                CreateImagePanels();
+            }
+            if (current_config_.foresight_command_topic !=
+                    CONFIG_foresight_command_topic ||
+                current_config_.foresight_command_topic_qos !=
+                    CONFIG_foresight_command_topic_qos ||
+                current_config_.foresight_status_topic !=
+                    CONFIG_foresight_status_topic ||
+                current_config_.foresight_status_topic_qos !=
+                    CONFIG_foresight_status_topic_qos)
+            {
+                if (FLAGS_v > 0)
+                    printf("  Rebuilding foresight planner interfaces.\n");
+                CreateForesightPlannerInterfaces();
+            }
         }
 
-        // Update our tracking of current config
         CaptureCurrentConfig();
 
-        if (FLAGS_v > 0) {
+        if (FLAGS_v > 0)
+        {
             printf("Configuration update completed successfully!\n");
             printf("==========================================\n");
         }
@@ -531,8 +870,9 @@ bool CheckAndUpdateConfiguration() {
     return false;
 }
 
-void *RosThread(void *arg) {
-    // Don't detach - we need to join this thread for clean shutdown
+void *RosThread(void *arg)
+{
+    (void)arg;
     CHECK_NOTNULL(server_);
     QObject::connect(
         server_, &RobotWebSocket::SetInitialPoseSignal, &SetInitialPose);
@@ -540,36 +880,45 @@ void *RosThread(void *arg) {
         server_, &RobotWebSocket::SetNavGoalSignal, &SetNavGoal);
     QObject::connect(
         server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
+    QObject::connect(
+        server_, &RobotWebSocket::ForesightCommandSignal,
+        server_,
+        [](const QString &text)
+        { HandleForesightCommand(text); },
+        Qt::QueuedConnection);
 
-    node_ = CREATE_NODE(CONFIG_ros_node_name);
+    node_ = rclcpp::Node::make_shared(CONFIG_ros_node_name);
 
-    // Create initial subscriptions and publishers
     CreateSubscriptions();
     CreatePublishers();
+    CreateImagePanels();
+    CreateForesightPlannerInterfaces();
 
-    // Capture initial configuration state for monitoring
     CaptureCurrentConfig();
 
     RateLoop loop(CONFIG_update_rate_hz);
     int config_check_counter = 0;
-    const int config_check_interval = 10;  // Check config every 10 loops (~1 second at 10Hz)
+    const int config_check_interval = 10; // Check config every 10 loops (~1 second at 10Hz)
 
-    while (ROS_OK() && run_.load()) {
-        // Periodically check for configuration changes
-        if (++config_check_counter >= config_check_interval) {
+    while (rclcpp::ok() && run_.load())
+    {
+        if (++config_check_counter >= config_check_interval)
+        {
             CheckAndUpdateConfiguration();
             config_check_counter = 0;
         }
 
         SendUpdate();
-        ROS_SPIN_ONCE(node_);
+        rclcpp::spin_some(node_);
         loop.Sleep();
     }
     return nullptr;
 }
 
-void SignalHandler(int) {
-    if (!run_.load()) {
+void SignalHandler(int)
+{
+    if (!run_.load())
+    {
         printf("Force Exit.\n");
         exit(0);
     }
@@ -577,8 +926,8 @@ void SignalHandler(int) {
     run_.store(false);
 }
 
-int main(int argc, char *argv[]) {
-    // Set usage message for gflags help
+int main(int argc, char *argv[])
+{
     google::SetUsageMessage(
         "WebViz WebSocket Server - Real-time robot visualization bridge\n"
         "Usage: " +
@@ -586,57 +935,51 @@ int main(int argc, char *argv[]) {
         " [options]\n"
         "For more information, see README.md");
 
-    // Parse command line flags - gflags will handle --help/--helpshort automatically and exit
     google::ParseCommandLineFlags(&argc, &argv, true);
     google::InitGoogleLogging(argv[0]);
 
-    // Initialize the configuration system with config-reader
-    config_reader::ConfigReader config_reader({FLAGS_config_file});
+    std::string config_path = FLAGS_config_file;
+    if (config_path.empty())
+    {
+        config_path =
+            ament_index_cpp::get_package_share_directory("webviz") +
+            "/config/webviz_config.lua";
+    }
+    config_reader::ConfigReader config_reader({config_path});
 
-    // Initialize Qt application.
     QCoreApplication app(argc, argv);
-    // Initialize ROS.
-    ROS_INIT(argc, argv, CONFIG_ros_node_name);
+    rclcpp::init(argc, argv);
     signal(SIGINT, SignalHandler);
     signal(SIGALRM, SignalHandler);
 
-    laser_scan_.header.stamp = ZERO_TIME();
-    localization_msg_.header.stamp = ZERO_TIME();
+    laser_scan_.header.stamp = rclcpp::Time(0, 0);
+    localization_msg_.header.stamp = rclcpp::Time(0, 0);
 
     server_ = new RobotWebSocket(CONFIG_websocket_port);
 
-    // Setup timer to check for exit signal
     QTimer exitTimer;
-    QObject::connect(&exitTimer, &QTimer::timeout, [&app]() {
+    QObject::connect(&exitTimer, &QTimer::timeout, [&app]()
+                     {
         if (!run_.load()) {
             app.quit();
-        }
-    });
-    exitTimer.start(CONFIG_exit_check_interval_ms);  // Check based on config
+        } });
+    exitTimer.start(CONFIG_exit_check_interval_ms);
 
     pthread_t ros_thread;
     pthread_create(&ros_thread, NULL, &RosThread, NULL);
 
-    // Run Qt event loop
     app.exec();
 
-    // Cleanup: ensure ROS thread stops
     run_.store(false);
-
-    // Give ROS thread time to exit gracefully
     usleep(CONFIG_thread_sleep_usec);
-
-    // Wait for ROS thread to finish
     pthread_join(ros_thread, NULL);
 
-    // Cleanup server
     delete server_;
     server_ = nullptr;
 
-    // Shutdown ROS
-    ROS_SHUTDOWN();
+    rclcpp::shutdown();
 
     // Use _exit() to bypass global destructors that cause segfaults
-    // This is a known issue with ROS2 + Qt cleanup order
+    // (known issue with ROS2 + Qt cleanup order).
     _exit(0);
 }

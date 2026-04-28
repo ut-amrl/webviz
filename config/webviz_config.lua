@@ -60,4 +60,43 @@ performance = {
   enable_message_aging = true;     -- Drop old messages based on timestamp
   enable_rate_limiting = true;     -- Limit update rate to configured fps
   thread_sleep_usec = 100000;      -- Microseconds to sleep before thread cleanup
-}; 
+};
+
+-- Image Panel Configuration
+-- Two image panels are streamed to the browser. Each panel can subscribe to
+-- either sensor_msgs/CompressedImage (msg_type = "compressed", JPEG bytes
+-- forwarded as-is) or sensor_msgs/Image (msg_type = "raw", encoded to JPEG
+-- via OpenCV before forwarding).
+image_panels = {
+  left = {
+    topic = "/camera/rgb/image_raw/compressed";
+    -- topic = "/camera/rgb/image_raw";
+    msg_type = "compressed";       -- "compressed" or "raw"
+    queue_size = 1;
+  };
+  right = {
+    topic = "/legged_deployment/image_plan/compressed";
+    msg_type = "compressed";
+    queue_size = 1;
+  };
+};
+
+-- Image Streaming Configuration
+image_streaming = {
+  max_rate_hz = 5.0;               -- Per-panel forwarding cap
+  jpeg_quality = 75;               -- JPEG quality (0-100); only used for raw Image topics
+};
+
+-- Foresight Planner Topic Configuration
+-- The webviz UI exposes a text input that publishes the goal_command as a
+-- std_msgs/String on ``command_topic``. graph_navigation orchestrates the
+-- mission and republishes per-iteration ForesightPlannerMsg updates on
+-- ``status_topic``; webviz subscribes to that topic and forwards the verdict
+-- and reason fields to the browser for display.
+foresight_planner = {
+  command_topic       = "/legged_deployment/foresight_planner/goal_command";
+  command_topic_qos   = 10;
+  status_topic        = "/legged_deployment/foresight_status";
+  status_topic_qos    = 10;
+};
+
