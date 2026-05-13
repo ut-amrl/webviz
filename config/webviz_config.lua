@@ -74,8 +74,11 @@ image_panels = {
     msg_type = "compressed";       -- "compressed" or "raw"
     queue_size = 1;
   };
+  -- Right panel shows the planner's 2x2 observation history mosaic
+  -- (top-left = oldest, bottom-right = current) published by
+  -- legged_deployment on each service call.
   right = {
-    topic = "/legged_deployment/image_plan/compressed";
+    topic = "/legged_deployment/observation_mosaic/compressed";
     msg_type = "compressed";
     queue_size = 1;
   };

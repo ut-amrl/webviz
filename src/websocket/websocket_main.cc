@@ -18,7 +18,11 @@
  * \author  Joydeep Biswas, (C) 2019
  */
 //========================================================================
+#include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
+#include <QtCore/QJsonValue>
 #include <QtCore/QString>
 #include <QtCore/QTimer>
 #include <signal.h>
@@ -544,19 +548,54 @@ static void CreateImagePanels()
     }
 }
 
-// Forward a ForesightPlannerMsg from ROS to all websocket clients.
+// Forward a ForesightPlannerMsg from ROS to all websocket clients. The wire
+// format is a single JSON text frame ``{"type": "foresight_response", ...}``
+// containing the verdict / reason / reflection_id plus the raw motion and
+// critic assistant texts and (when present) a base64-encoded JPEG of the
+// annotated motion plan image. The browser uses these to render a chat-style
+// transcript with thumbnails per reflection iteration.
 static void OnForesightStatus(const ForesightPlannerMsg::SharedPtr msg)
 {
-    fprintf(stderr, "[fs] cb verdict=%d reason='%s' refl=%u server=%p\n",
-            (int)msg->verdict.data, msg->reason.data.c_str(),
-            msg->reflection_id, (void *)server_);
+    if (FLAGS_v > 0)
+    {
+        fprintf(stderr,
+                "[fs] cb verdict=%d reason='%s' refl=%u motion_bytes=%zu "
+                "image_bytes=%zu\n",
+                (int)msg->verdict.data, msg->reason.data.c_str(),
+                msg->reflection_id, msg->motion_text.data.size(),
+                msg->motion_image.data.size());
+    }
     if (server_ == nullptr)
         return;
     const QString verdict = msg->verdict.data ? "true" : "false";
     const QString reason = QString::fromStdString(msg->reason.data);
     const quint32 reflection_id = static_cast<quint32>(msg->reflection_id);
     const QString state = msg->verdict.data ? "complete" : "planning";
-    server_->SendForesightStatus(state, verdict, reason, reflection_id);
+
+    QJsonObject obj;
+    obj.insert("type", QJsonValue("foresight_response"));
+    obj.insert("state", QJsonValue(state));
+    obj.insert("verdict", QJsonValue(verdict));
+    obj.insert("reason", QJsonValue(reason));
+    obj.insert("reflection_id",
+               QJsonValue(static_cast<qint64>(reflection_id)));
+    obj.insert("thinking_text",
+               QJsonValue(QString::fromStdString(msg->thinking_text.data)));
+    obj.insert("motion_text",
+               QJsonValue(QString::fromStdString(msg->motion_text.data)));
+    obj.insert("critic_text",
+               QJsonValue(QString::fromStdString(msg->critic_text.data)));
+    if (!msg->motion_image.data.empty())
+    {
+        const QByteArray jpeg(
+            reinterpret_cast<const char *>(msg->motion_image.data.data()),
+            static_cast<int>(msg->motion_image.data.size()));
+        obj.insert("motion_image_b64",
+                   QJsonValue(QString::fromLatin1(jpeg.toBase64())));
+    }
+    const QString text =
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    server_->SendForesightStatus(text);
 }
 
 // Build (or rebuild) the foresight publisher + status subscription.
@@ -594,8 +633,18 @@ static void HandleForesightCommand(QString text)
     if (server_)
     {
         // Immediately echo a "sent" status to acknowledge receipt; downstream
-        // status updates from the planner will overwrite it.
-        server_->SendForesightStatus("sent", "", "", 0);
+        // status updates from the planner will overwrite it. The browser
+        // treats this as a no-op for the chat transcript (no motion_text /
+        // motion_image fields), but uses it to update the status pill.
+        QJsonObject obj;
+        obj.insert("type", QJsonValue("foresight_response"));
+        obj.insert("state", QJsonValue("sent"));
+        obj.insert("verdict", QJsonValue(QString("")));
+        obj.insert("reason", QJsonValue(QString("")));
+        obj.insert("reflection_id", QJsonValue(static_cast<qint64>(0)));
+        const QString sent_text =
+            QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+        server_->SendForesightStatus(sent_text);
     }
 }
 

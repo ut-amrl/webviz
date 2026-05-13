@@ -136,21 +136,19 @@ public:
                    const QByteArray &jpeg,
                    double stamp_sec);
     // Send a foresight planner status update as a JSON text frame to all
-    // connected clients. ``state`` is a short human-readable label (e.g.
-    // "sent", "planning", "complete"), ``verdict`` is "true"/"false"/"" and
-    // ``reflection_id`` is the planner's inner-iteration counter. All fields
-    // may be empty when the value is not yet known.
-    void SendForesightStatus(const QString &state,
-                             const QString &verdict,
-                             const QString &reason,
-                             quint32 reflection_id);
+    // connected clients. ``payload_json`` is a pre-serialized JSON document
+    // whose root must be an object containing at minimum a ``type`` field
+    // (e.g. "foresight_response"). Building the JSON in the caller keeps the
+    // signal/slot signature small as the payload schema grows (state,
+    // verdict, reason, reflection_id, thinking_text, motion_text,
+    // critic_text, motion_image_b64, ...).
+    void SendForesightStatus(const QString &payload_json);
 
 Q_SIGNALS:
     void closed();
     void SendDataSignal();
     void SendImageSignal();
-    void SendForesightStatusSignal(QString state, QString verdict,
-                                   QString reason, quint32 reflection_id);
+    void SendForesightStatusSignal(QString payload_json);
     void SetInitialPoseSignal(float x, float y, float theta, QString map);
     void SetNavGoalSignal(float x, float y, float theta, QString map);
     void ResetNavGoalsSignal();
@@ -163,8 +161,7 @@ private Q_SLOTS:
     void socketDisconnected();
     void SendDataSlot();
     void SendImageSlot();
-    void SendForesightStatusSlot(QString state, QString verdict,
-                                 QString reason, quint32 reflection_id);
+    void SendForesightStatusSlot(QString payload_json);
 
 private:
     void ProcessCallback(const QJsonObject &json);

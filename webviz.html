@@ -3,9 +3,7 @@
 
 <head>
   <meta charset="utf-8" />
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
   <style>
     /* Bootstrap covers the rest; only retain things Bootstrap does not. */
     #canvas {
@@ -21,6 +19,67 @@
       max-height: 30vh;
       object-fit: contain;
       background: #f0f0f0;
+    }
+
+    /* Chat transcript: thinking bubbles align left (muted, italic) and
+       lead the turn, motion bubbles align left, critic bubbles right.
+       Bubbles are intentionally narrow so long completions wrap cleanly. */
+    #chatHistory {
+      max-height: 50vh;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .chat-bubble {
+      max-width: 85%;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 0.8rem;
+      line-height: 1.25;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .chat-bubble-thinking {
+      background: #f3f4f6;
+      color: #495057;
+      align-self: flex-start;
+      font-style: italic;
+    }
+
+    .chat-bubble-motion {
+      background: #e7f1ff;
+      color: #0b3d91;
+      align-self: flex-start;
+    }
+
+    .chat-bubble-critic {
+      background: #f4e7ff;
+      color: #4a148c;
+      align-self: flex-end;
+    }
+
+    .chat-bubble-user {
+      background: #e2e3e5;
+      color: #212529;
+      align-self: center;
+      font-weight: 500;
+      max-width: 95%;
+    }
+
+    .chat-thumb {
+      width: 100%;
+      max-height: 18vh;
+      object-fit: contain;
+      background: #ffffff;
+      border-radius: 4px;
+      margin-top: 4px;
+    }
+
+    .chat-meta {
+      font-size: 0.7rem;
+      opacity: 0.75;
+      margin-bottom: 2px;
     }
   </style>
 </head>
@@ -70,24 +129,28 @@
 
     <div class="row g-2 mb-2">
       <div class="col-auto">
-        <button type="button" id="setLocation" class="btn btn-sm btn-outline-secondary" onclick="setLocationButton()">Set Pose</button>
+        <button type="button" id="setLocation" class="btn btn-sm btn-outline-secondary"
+          onclick="setLocationButton()">Set Pose</button>
       </div>
       <div class="col-auto">
-        <button type="button" id="setNavGoal" class="btn btn-sm btn-outline-secondary" onclick="setNavGoalButton()">Set Nav Target</button>
+        <button type="button" id="setNavGoal" class="btn btn-sm btn-outline-secondary" onclick="setNavGoalButton()">Set
+          Nav Target</button>
       </div>
       <div class="col-auto">
-        <button type="button" id="setWaypoints" class="btn btn-sm btn-outline-secondary" onclick="setWaypointsButton()">Set Waypoints</button>
+        <button type="button" id="setWaypoints" class="btn btn-sm btn-outline-secondary"
+          onclick="setWaypointsButton()">Set Waypoints</button>
       </div>
       <div class="col-auto">
-        <button type="button" id="resetNav" class="btn btn-sm btn-outline-danger" onclick="resetNavButton()">Reset Nav</button>
+        <button type="button" id="resetNav" class="btn btn-sm btn-outline-danger" onclick="resetNavButton()">Reset
+          Nav</button>
       </div>
     </div>
 
     <div class="accordion mb-2" id="advancedAccordion">
       <div class="accordion-item">
         <h2 class="accordion-header">
-          <button class="accordion-button collapsed py-1" type="button"
-            data-bs-toggle="collapse" data-bs-target="#advancedBody">
+          <button class="accordion-button collapsed py-1" type="button" data-bs-toggle="collapse"
+            data-bs-target="#advancedBody">
             Advanced Configuration
           </button>
         </h2>
@@ -95,17 +158,28 @@
           <div class="accordion-body">
             <div class="row g-2">
               <div class="col-md-3"><label class="form-label small">WebSocket Port</label>
-                <input type="number" id="port" class="form-control form-control-sm" value="10272" min="1" max="65535"></div>
+                <input type="number" id="port" class="form-control form-control-sm" value="10272" min="1" max="65535">
+              </div>
               <div class="col-md-3"><label class="form-label small">Laser Offset (m)</label>
-                <input type="number" id="laserOffset" class="form-control form-control-sm" value="0.2" step="0.01"></div>
+                <input type="number" id="laserOffset" class="form-control form-control-sm" value="0.2" step="0.01">
+              </div>
               <div class="col-md-3"><label class="form-label small">Update Rate (Hz)</label>
-                <input type="number" id="updateRate" class="form-control form-control-sm" value="20.0" step="0.1"></div>
+                <input type="number" id="updateRate" class="form-control form-control-sm" value="20.0" step="0.1">
+              </div>
               <div class="col-md-3"><label class="form-label small">Position Threshold (m)</label>
-                <input type="number" id="positionThreshold" class="form-control form-control-sm" value="0.7" step="0.1"></div>
+                <input type="number" id="positionThreshold" class="form-control form-control-sm" value="0.7" step="0.1">
+              </div>
               <div class="col-md-3"><label class="form-label small">Orientation Threshold (rad)</label>
-                <input type="number" id="orientationThreshold" class="form-control form-control-sm" value="3.0" step="0.1"></div>
+                <input type="number" id="orientationThreshold" class="form-control form-control-sm" value="3.0"
+                  step="0.1">
+              </div>
               <div class="col-md-3"><label class="form-label small">Waypoint Pause (sec)</label>
-                <input type="number" id="waypointPause" class="form-control form-control-sm" value="15.0" step="1.0"></div>
+                <input type="number" id="waypointPause" class="form-control form-control-sm" value="15.0" step="1.0">
+              </div>
+              <div class="col-md-3"><label class="form-label small">Chat history (turns)</label>
+                <input type="number" id="chatHistoryTurns" class="form-control form-control-sm" value="8" min="1"
+                  max="64" step="1">
+              </div>
             </div>
           </div>
         </div>
@@ -126,14 +200,17 @@
         </div>
         <div class="card mb-2">
           <div class="card-body p-2">
-            <div class="text-muted small">Right panel</div>
-            <img id="imgRight" class="panel-image" alt="right panel">
+            <div class="text-muted small">Observation history (oldest -> current)</div>
+            <img id="imgRight" class="panel-image" alt="observation mosaic">
           </div>
         </div>
         <div class="card mb-2">
           <div class="card-body p-2">
-            <div class="font-monospace small">verdict: <span id="verdictValue"></span></div>
-            <div class="font-monospace small">reason:&nbsp; <span id="reasonValue"></span></div>
+            <div class="text-muted small d-flex justify-content-between align-items-center">
+              <span>Planner conversation</span>
+              <span class="small">refl <span id="foresightReflection">0</span></span>
+            </div>
+            <div id="chatHistory" class="d-flex flex-column gap-2 mt-1"></div>
           </div>
         </div>
       </div>
@@ -216,6 +293,10 @@
       if (window.localStorage.getItem('waypointPause')) {
         document.getElementById('waypointPause').value =
           window.localStorage.getItem('waypointPause');
+      }
+      if (window.localStorage.getItem('chatHistoryTurns')) {
+        document.getElementById('chatHistoryTurns').value =
+          window.localStorage.getItem('chatHistoryTurns');
       }
     } catch (e) {
       updateStatus('Unable to access localstorage, settings will not be saved');
@@ -943,17 +1024,98 @@
       setPanelImage(frame.panel_id, frame.jpegBytes);
     }
 
-    function setVerdictReason(verdict, reason) {
-      document.getElementById('verdictValue').textContent = verdict || '';
-      document.getElementById('reasonValue').textContent = reason || '';
-    }
-
     function setForesightStatus(text, reflectionId) {
       document.getElementById('foresightStatus').textContent = text;
       if (typeof reflectionId === 'number') {
         document.getElementById('foresightReflection').textContent =
           String(reflectionId);
       }
+    }
+
+    // Chat transcript: thinking / motion (left) and critic (right) bubbles
+    // accumulate across planning iterations and across graph_navigation
+    // auto-replans. The conversation persists until the user starts a new
+    // language command (sendForesightCommand) or hits reset
+    // (sendResetNavGoals); both call clearChatHistory(). We intentionally
+    // do NOT dedup or auto-reset on header.stamp because graph_navigation
+    // will keep retriggering the planner with fresh stamps for the same
+    // mission, and each replan is a legitimate new entry in the chat.
+
+    function chatHistoryMaxTurns() {
+      const v = parseInt(
+        document.getElementById('chatHistoryTurns').value, 10);
+      return (Number.isFinite(v) && v > 0) ? v : 8;
+    }
+
+    function clearChatHistory() {
+      const root = document.getElementById('chatHistory');
+      while (root.firstChild) root.removeChild(root.firstChild);
+    }
+
+    function trimChatHistoryToMax() {
+      const root = document.getElementById('chatHistory');
+      const maxBubbles = chatHistoryMaxTurns();
+      while (root.children.length > maxBubbles) {
+        root.removeChild(root.firstChild);
+      }
+    }
+
+    function appendChatBubble(kind, headerHtml, bodyText, imageB64) {
+      const root = document.getElementById('chatHistory');
+      const bubble = document.createElement('div');
+      bubble.className = `chat-bubble chat-bubble-${kind}`;
+      if (headerHtml) {
+        const hdr = document.createElement('div');
+        hdr.className = 'chat-meta';
+        hdr.innerHTML = headerHtml;
+        bubble.appendChild(hdr);
+      }
+      if (bodyText) {
+        const body = document.createElement('div');
+        body.textContent = bodyText;
+        bubble.appendChild(body);
+      }
+      if (imageB64) {
+        const img = document.createElement('img');
+        img.className = 'chat-thumb';
+        img.alt = 'motion plan image';
+        img.src = `data:image/jpeg;base64,${imageB64}`;
+        bubble.appendChild(img);
+      }
+      root.appendChild(bubble);
+      trimChatHistoryToMax();
+      root.scrollTop = root.scrollHeight;
+    }
+
+    function appendUserBubble(text) {
+      appendChatBubble('user', 'goal', text, null);
+    }
+
+    function appendThinkingBubble(reflectionId, text) {
+      const meta = `thinking &middot; refl ${reflectionId}`;
+      appendChatBubble('thinking', meta, text, null);
+    }
+
+    function appendMotionBubble(reflectionId, text, imageB64) {
+      const meta = `motion &middot; refl ${reflectionId}`;
+      appendChatBubble('motion', meta, text, imageB64);
+    }
+
+    function appendCriticBubble(reflectionId, text, verdict, reason) {
+      const verdictLabel = verdict === 'true' ? 'PASS'
+        : verdict === 'false' ? 'FAIL'
+          : '';
+      const verdictClass = verdict === 'true' ? 'bg-success'
+        : verdict === 'false' ? 'bg-danger'
+          : 'bg-secondary';
+      const pill = verdictLabel
+        ? `<span class="badge ${verdictClass} ms-1">${verdictLabel}</span>`
+        : '';
+      const meta = `critic &middot; refl ${reflectionId}${pill}`;
+      // Prefer the parsed reason for readability, but fall back to the raw
+      // critic completion when the planner could not parse it.
+      const body = (reason && reason.length > 0) ? reason : (text || '');
+      appendChatBubble('critic', meta, body, null);
     }
 
     function sendForesightCommand() {
@@ -969,7 +1131,8 @@
         text: text,
       }));
       setForesightStatus('sending...', 0);
-      setVerdictReason('', '');
+      clearChatHistory();
+      appendUserBubble(text);
     }
 
     function sendResetNavGoals() {
@@ -981,15 +1144,42 @@
         type: 'reset_nav_goals',
       }));
       setForesightStatus('reset', 0);
-      setVerdictReason('', '');
+      clearChatHistory();
     }
 
     function onForesightResponse(json) {
       const state = json.state || '';
       const reflectionId =
-        typeof json.reflection_id === 'number' ? json.reflection_id : undefined;
+        typeof json.reflection_id === 'number' ? json.reflection_id : 0;
       setForesightStatus(state || 'unknown', reflectionId);
-      setVerdictReason(json.verdict || '', json.reason || '');
+      // The "sent" echo from HandleForesightCommand carries no chat content;
+      // skip emitting bubbles for it.
+      if (state === 'sent') return;
+
+      const thinkingText = json.thinking_text || '';
+      const motionText = json.motion_text || '';
+      const motionImg = json.motion_image_b64 || '';
+      const criticText = json.critic_text || '';
+      const verdict = json.verdict || '';
+      const reason = json.reason || '';
+
+      // Render bubbles in fixed conversation order (thinking -> motion ->
+      // critic). Each section is independently gated on having content, so
+      // ECoT (thinking + motion), reflect (motion + critic), or full
+      // (thinking + motion + critic) flows all render correctly. The
+      // thinking trace is only populated on refl=0 by the planner. Bubbles
+      // accumulate across iterations and across graph_navigation replans;
+      // the chat is only cleared by an explicit user action (new language
+      // command or reset nav goals).
+      if (thinkingText) {
+        appendThinkingBubble(reflectionId, thinkingText);
+      }
+      if (motionText || motionImg) {
+        appendMotionBubble(reflectionId, motionText, motionImg);
+      }
+      if (criticText || reason || verdict) {
+        appendCriticBubble(reflectionId, criticText, verdict, reason);
+      }
     }
 
     function processJsonData(json) {
@@ -1029,6 +1219,7 @@
         window.localStorage.setItem('positionThreshold', document.getElementById('positionThreshold').value);
         window.localStorage.setItem('orientationThreshold', document.getElementById('orientationThreshold').value);
         window.localStorage.setItem('waypointPause', document.getElementById('waypointPause').value);
+        window.localStorage.setItem('chatHistoryTurns', document.getElementById('chatHistoryTurns').value);
       } catch (e) {
         console.log('Localstorage denied');
       }

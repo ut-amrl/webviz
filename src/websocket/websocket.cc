@@ -91,6 +91,14 @@ RobotWebSocket::RobotWebSocket(uint16_t port) : ws_server_(new QWebSocketServer(
         connect(ws_server_, &QWebSocketServer::newConnection,
                 this, &RobotWebSocket::onNewConnection);
     }
+    // Wire up server-level signal→slot pairs once here; onNewConnection must
+    // NOT duplicate these or they accumulate on every client connect.
+    connect(this, &RobotWebSocket::SendDataSignal,
+            this, &RobotWebSocket::SendDataSlot);
+    connect(this, &RobotWebSocket::SendImageSignal,
+            this, &RobotWebSocket::SendImageSlot);
+    connect(this, &RobotWebSocket::SendForesightStatusSignal,
+            this, &RobotWebSocket::SendForesightStatusSlot);
     // Initialize localization time stamp to zero.
     localization_.header.stamp = rclcpp::Time(0, 0);
 }
@@ -116,12 +124,6 @@ void RobotWebSocket::onNewConnection()
             this, &RobotWebSocket::processBinaryMessage);
     connect(socket, &QWebSocket::disconnected,
             this, &RobotWebSocket::socketDisconnected);
-    connect(this, &RobotWebSocket::SendDataSignal,
-            this, &RobotWebSocket::SendDataSlot);
-    connect(this, &RobotWebSocket::SendImageSignal,
-            this, &RobotWebSocket::SendImageSlot);
-    connect(this, &RobotWebSocket::SendForesightStatusSignal,
-            this, &RobotWebSocket::SendForesightStatusSlot);
 
     clients_.push_back(socket);
 }
@@ -561,35 +563,24 @@ void RobotWebSocket::SendImageSlot()
     }
 }
 
-void RobotWebSocket::SendForesightStatus(const QString &state,
-                                         const QString &verdict,
-                                         const QString &reason,
-                                         quint32 reflection_id)
+void RobotWebSocket::SendForesightStatus(const QString &payload_json)
 {
-    SendForesightStatusSignal(state, verdict, reason, reflection_id);
+    SendForesightStatusSignal(payload_json);
 }
 
-void RobotWebSocket::SendForesightStatusSlot(QString state,
-                                             QString verdict,
-                                             QString reason,
-                                             quint32 reflection_id)
+void RobotWebSocket::SendForesightStatusSlot(QString payload_json)
 {
-    fprintf(stderr, "[fs] slot fired clients=%zu state='%s' verdict='%s'\n",
-            clients_.size(), state.toStdString().c_str(),
-            verdict.toStdString().c_str());
+    if (FLAGS_v > 0)
+    {
+        fprintf(stderr,
+                "[fs] slot fired clients=%zu bytes=%d\n",
+                clients_.size(),
+                static_cast<int>(payload_json.size()));
+    }
     if (clients_.empty())
         return;
-    QJsonObject obj;
-    obj.insert("type", QJsonValue("foresight_response"));
-    obj.insert("state", QJsonValue(state));
-    obj.insert("verdict", QJsonValue(verdict));
-    obj.insert("reason", QJsonValue(reason));
-    obj.insert("reflection_id",
-               QJsonValue(static_cast<qint64>(reflection_id)));
-    const QString text =
-        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
     for (auto *c : clients_)
     {
-        c->sendTextMessage(text);
+        c->sendTextMessage(payload_json);
     }
 }
