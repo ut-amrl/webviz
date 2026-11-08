@@ -74,11 +74,10 @@ image_panels = {
     msg_type = "compressed";       -- "compressed" or "raw"
     queue_size = 1;
   };
-  -- Right panel shows the planner's 2x2 observation history mosaic
-  -- (top-left = oldest, bottom-right = current) published by
-  -- legged_deployment on each service call.
+  -- Right panel shows memo's plan image: the keyframe views (oldest ->
+  -- current), the current one annotated with the plan and route window.
   right = {
-    topic = "/legged_deployment/observation_mosaic/compressed";
+    topic = "/memo/plan_image/compressed";
     msg_type = "compressed";
     queue_size = 1;
   };
@@ -90,16 +89,64 @@ image_streaming = {
   jpeg_quality = 75;               -- JPEG quality (0-100); only used for raw Image topics
 };
 
--- Foresight Planner Topic Configuration
--- The webviz UI exposes a text input that publishes the goal_command as a
--- std_msgs/String on ``command_topic``. graph_navigation orchestrates the
--- mission and republishes per-iteration ForesightPlannerMsg updates on
--- ``status_topic``; webviz subscribes to that topic and forwards the verdict
--- and reason fields to the browser for display.
-foresight_planner = {
-  command_topic       = "/legged_deployment/foresight_planner/goal_command";
-  command_topic_qos   = 10;
-  status_topic        = "/legged_deployment/foresight_status";
-  status_topic_qos    = 10;
+-- Memo planner: the UI's task box publishes std_msgs/String on task_topic;
+-- memo_deployment's JSON status (std_msgs/String) on status_topic is shown in
+-- the Robot tab.
+memo = {
+  task_topic   = "/memo/task";
+  status_topic = "/memo/status";
 };
 
+-- GPS navigation (Map tab): the robot fix (amrl_msgs/GPSMsg, from
+-- gps_phone_interface) and graph_navigation's GraphNavGPSSrv, which plans the
+-- OSM route for the GPS goals clicked on the map.
+gps = {
+  fix_topic     = "/phone/gps_heading";
+  route_service = "/graphNavGPSSrv";
+  send_rate_hz  = 2.0;
+};
+
+-- Sensor health (Sensor Health tab, also published on diagnostics_topic).
+-- Parallel lists: one entry per topic. A topic is MISSING until it appears in
+-- the ROS graph, STALE when nothing arrived within stale_sec, WARN below half
+-- of expected_hz (0 = no rate check), OK otherwise.
+sensor_health = {
+  publish_rate_hz   = 2.0;
+  diagnostics_topic = "/diagnostics";
+  names = {
+    "Spot odometry", "Spot joint states", "Spot battery",
+    "VLP16 points", "VLP16 scan",
+    "Kinect RGB", "Kinect depth", "Kinect scan",
+    "Phone GPS",
+    "VectorNav IMU",
+    "Memo status", "Memo plan",
+    "Nav status", "Nav cmd_vel", "Robot cmd_vel",
+  };
+  topics = {
+    "/odometry", "/joint_states", "/status/battery_states",
+    "/velodyne_points", "/scan",
+    "/camera/rgb/image_raw/compressed", "/camera/depth/image_raw", "/kinect_scan",
+    "/phone/gps_heading",
+    "/vectornav/imu_uncompensated",
+    "/memo/status", "/memo/plan",
+    "/navigation/mission_status", "/navigation/cmd_vel", "/cmd_vel",
+  };
+  expected_hz = {
+    50.0, 50.0, 0.0,
+    10.0, 10.0,
+    15.0, 15.0, 15.0,
+    1.0,
+    200.0,
+    0.0, 0.0,
+    0.0, 0.0, 0.0,
+  };
+  stale_sec = {
+    0.5, 0.5, 5.0,
+    0.5, 0.5,
+    0.5, 0.5, 0.5,
+    3.0,
+    0.5,
+    10.0, 10.0,
+    5.0, 2.0, 2.0,
+  };
+};

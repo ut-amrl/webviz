@@ -20,6 +20,7 @@
 //========================================================================
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonValue>
@@ -30,7 +31,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -41,13 +45,17 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "amrl_msgs/msg/visualization_msg.hpp"
 #include "amrl_msgs/msg/localization2_d_msg.hpp"
-#include "amrl_msgs/msg/foresight_planner_msg.hpp"
+#include "amrl_msgs/msg/gps_msg.hpp"
+#include "amrl_msgs/msg/gps_array_msg.hpp"
+#include "amrl_msgs/srv/graph_nav_gps_srv.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -60,7 +68,11 @@
 #include "config_reader/config_reader.h"
 #include "websocket.h"
 
-using amrl_msgs::msg::ForesightPlannerMsg;
+using amrl_msgs::msg::GPSArrayMsg;
+using amrl_msgs::msg::GPSMsg;
+using amrl_msgs::srv::GraphNavGPSSrv;
+using diagnostic_msgs::msg::DiagnosticArray;
+using diagnostic_msgs::msg::DiagnosticStatus;
 using amrl_msgs::msg::Localization2DMsg;
 using amrl_msgs::msg::VisualizationMsg;
 using geometry_msgs::msg::PoseStamped;
@@ -123,14 +135,26 @@ CONFIG_INT(right_image_queue_size, "image_panels.right.queue_size");
 CONFIG_DOUBLE(image_max_rate_hz, "image_streaming.max_rate_hz");
 CONFIG_INT(image_jpeg_quality, "image_streaming.jpeg_quality");
 
-// Foresight planner topic configuration. The webviz UI publishes the typed
-// goal_command on ``command_topic`` and listens for ``ForesightPlannerMsg``
-// updates on ``status_topic`` (verdict + reason + reflection_id) which it
-// forwards to the browser.
-CONFIG_STRING(foresight_command_topic, "foresight_planner.command_topic");
-CONFIG_INT(foresight_command_topic_qos, "foresight_planner.command_topic_qos");
-CONFIG_STRING(foresight_status_topic, "foresight_planner.status_topic");
-CONFIG_INT(foresight_status_topic_qos, "foresight_planner.status_topic_qos");
+// Memo planner: the UI publishes the typed task on ``task_topic``; the
+// planner's JSON status (std_msgs/String) on ``status_topic`` is forwarded.
+CONFIG_STRING(memo_task_topic, "memo.task_topic");
+CONFIG_STRING(memo_status_topic, "memo.status_topic");
+
+// GPS navigation: the robot fix (amrl_msgs/GPSMsg) is forwarded to the map
+// tab; GPS goals clicked on the map are sent to graph_navigation's
+// GraphNavGPSSrv, and the returned OSM route is drawn on the map.
+CONFIG_STRING(gps_fix_topic, "gps.fix_topic");
+CONFIG_STRING(gps_route_service, "gps.route_service");
+CONFIG_DOUBLE(gps_send_rate_hz, "gps.send_rate_hz");
+
+// Sensor health: parallel lists, one entry per monitored topic. Topics are
+// subscribed type-agnostically once they appear in the ROS graph.
+CONFIG_STRINGLIST(health_names, "sensor_health.names");
+CONFIG_STRINGLIST(health_topics, "sensor_health.topics");
+CONFIG_DOUBLELIST(health_expected_hz, "sensor_health.expected_hz");
+CONFIG_DOUBLELIST(health_stale_sec, "sensor_health.stale_sec");
+CONFIG_DOUBLE(health_publish_rate_hz, "sensor_health.publish_rate_hz");
+CONFIG_STRING(health_diagnostics_topic, "sensor_health.diagnostics_topic");
 
 namespace
 {
@@ -186,7 +210,7 @@ namespace
         int loc_queue_size;
         int pub_queue_size;
 
-        // Image panels and foresight planner.
+        // Image panels.
         std::string left_image_topic;
         std::string left_image_msg_type;
         int left_image_queue_size;
@@ -195,10 +219,6 @@ namespace
         int right_image_queue_size;
         double image_max_rate_hz;
         int image_jpeg_quality;
-        std::string foresight_command_topic;
-        int foresight_command_topic_qos;
-        std::string foresight_status_topic;
-        int foresight_status_topic_qos;
     };
 
     CurrentConfig current_config_;
@@ -216,12 +236,45 @@ namespace
     };
     std::vector<ImagePanel> image_panels_;
 
-    // Foresight planner topic interfaces. Webviz only publishes the goal_command
-    // String onto ``foresight_command_pub_``; status updates flow back through
-    // ``foresight_status_sub_`` from the planner / graph_navigation.
-    rclcpp::Publisher<String>::SharedPtr foresight_command_pub_;
-    rclcpp::Subscription<ForesightPlannerMsg>::SharedPtr foresight_status_sub_;
+    // Memo planner: task commands out, JSON status in.
+    rclcpp::Publisher<String>::SharedPtr memo_task_pub_;
+    rclcpp::Subscription<String>::SharedPtr memo_status_sub_;
+    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr recording_sub_;
+
+    // GPS: robot fix in, GPS goals out through graph_navigation's service.
+    rclcpp::Subscription<GPSMsg>::SharedPtr gps_sub_;
+    rclcpp::Client<GraphNavGPSSrv>::SharedPtr gps_route_client_;
+    std::mutex gps_mutex_;
+    GPSMsg last_gps_;
+    bool have_gps_ = false;
+    double last_gps_send_sec_ = 0.0;
+
+    // Sensor health: one entry per configured topic.
+    struct MonitoredTopic
+    {
+        std::string name;
+        std::string topic;
+        double expected_hz = 0.0;
+        double stale_sec = 1.0;
+        std::string type;                 // discovered from the ROS graph
+        rclcpp::GenericSubscription::SharedPtr sub;
+        std::deque<double> arrivals;      // steady-clock seconds, last kRateWindow
+        std::deque<size_t> sizes;         // serialized bytes, same window
+        double last_sec = -1.0;
+        uint64_t count = 0;
+        size_t publishers = 0;            // refreshed with the graph
+    };
+    constexpr double kRateWindow = 2.0;   // seconds over which rate is measured
+    std::vector<std::unique_ptr<MonitoredTopic>> monitored_;
+    rclcpp::Publisher<DiagnosticArray>::SharedPtr diagnostics_pub_;
 } // namespace
+
+static double SteadyNowSec()
+{
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 void LocalizationCallback(const Localization2DMsg &msg)
 {
@@ -548,104 +601,320 @@ static void CreateImagePanels()
     }
 }
 
-// Forward a ForesightPlannerMsg from ROS to all websocket clients. The wire
-// format is a single JSON text frame ``{"type": "foresight_response", ...}``
-// containing the verdict / reason / reflection_id plus the raw motion and
-// critic assistant texts and (when present) a base64-encoded JPEG of the
-// annotated motion plan image. The browser uses these to render a chat-style
-// transcript with thumbnails per reflection iteration.
-static void OnForesightStatus(const ForesightPlannerMsg::SharedPtr msg)
+// Forward the memo planner's JSON status (std_msgs/String) to the browser as
+// ``{"type": "memo_status", "status": {...}}``. A status that is not valid
+// JSON is forwarded as a string.
+static void OnMemoStatus(const String::SharedPtr msg)
 {
-    if (FLAGS_v > 0)
-    {
-        fprintf(stderr,
-                "[fs] cb verdict=%d reason='%s' refl=%u motion_bytes=%zu "
-                "image_bytes=%zu\n",
-                (int)msg->verdict.data, msg->reason.data.c_str(),
-                msg->reflection_id, msg->motion_text.data.size(),
-                msg->motion_image.data.size());
-    }
     if (server_ == nullptr)
         return;
-    const QString verdict = msg->verdict.data ? "true" : "false";
-    const QString reason = QString::fromStdString(msg->reason.data);
-    const quint32 reflection_id = static_cast<quint32>(msg->reflection_id);
-    const QString state = msg->verdict.data ? "complete" : "planning";
-
     QJsonObject obj;
-    obj.insert("type", QJsonValue("foresight_response"));
-    obj.insert("state", QJsonValue(state));
-    obj.insert("verdict", QJsonValue(verdict));
-    obj.insert("reason", QJsonValue(reason));
-    obj.insert("reflection_id",
-               QJsonValue(static_cast<qint64>(reflection_id)));
-    obj.insert("thinking_text",
-               QJsonValue(QString::fromStdString(msg->thinking_text.data)));
-    obj.insert("motion_text",
-               QJsonValue(QString::fromStdString(msg->motion_text.data)));
-    obj.insert("critic_text",
-               QJsonValue(QString::fromStdString(msg->critic_text.data)));
-    if (!msg->motion_image.data.empty())
-    {
-        const QByteArray jpeg(
-            reinterpret_cast<const char *>(msg->motion_image.data.data()),
-            static_cast<int>(msg->motion_image.data.size()));
-        obj.insert("motion_image_b64",
-                   QJsonValue(QString::fromLatin1(jpeg.toBase64())));
-    }
-    const QString text =
-        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
-    server_->SendForesightStatus(text);
+    obj.insert("type", QJsonValue("memo_status"));
+    QJsonParseError err;
+    const QJsonDocument doc =
+        QJsonDocument::fromJson(QByteArray::fromStdString(msg->data), &err);
+    if (err.error == QJsonParseError::NoError && doc.isObject())
+        obj.insert("status", doc.object());
+    else
+        obj.insert("status", QJsonValue(QString::fromStdString(msg->data)));
+    server_->SendJson(
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
 }
 
-// Build (or rebuild) the foresight publisher + status subscription.
-static void CreateForesightPlannerInterfaces()
+// Forward recorder feedback, rather than the start/stop command, so the
+// indicator reflects the writer's actual state. The recorder publishes at 2 Hz.
+static void CreateRecordingInterface()
 {
-    foresight_command_pub_ = node_->create_publisher<String>(
-        CONFIG_foresight_command_topic, CONFIG_foresight_command_topic_qos);
-    foresight_status_sub_ = node_->create_subscription<ForesightPlannerMsg>(
-        CONFIG_foresight_status_topic, CONFIG_foresight_status_topic_qos,
-        [](const ForesightPlannerMsg::SharedPtr msg)
+    recording_sub_ = node_->create_subscription<std_msgs::msg::Int32>(
+        "/recording", 10,
+        [](const std_msgs::msg::Int32::SharedPtr msg)
         {
-            OnForesightStatus(msg);
+            QJsonObject obj;
+            obj.insert("type", QJsonValue("recording_status"));
+            obj.insert("recording", QJsonValue(msg->data == 1));
+            server_->SendJson(QString::fromUtf8(
+                QJsonDocument(obj).toJson(QJsonDocument::Compact)));
         });
+}
+
+static void CreateMemoInterfaces()
+{
+    memo_task_pub_ = node_->create_publisher<String>(CONFIG_memo_task_topic, 10);
+    memo_status_sub_ = node_->create_subscription<String>(
+        CONFIG_memo_status_topic, 10,
+        [](const String::SharedPtr msg) { OnMemoStatus(msg); });
     if (FLAGS_v > 0)
     {
-        printf("  Foresight command topic: %s\n",
-               CONFIG_foresight_command_topic.c_str());
-        printf("  Foresight status topic:  %s\n",
-               CONFIG_foresight_status_topic.c_str());
+        printf("  Memo task topic:   %s\n", CONFIG_memo_task_topic.c_str());
+        printf("  Memo status topic: %s\n", CONFIG_memo_status_topic.c_str());
     }
 }
 
-// Slot wired to RobotWebSocket::ForesightCommandSignal. Runs on the ROS
-// thread (Qt::QueuedConnection is set up in RosThread). Publishes the
-// goal_command as a String on ``foresight_command_topic``; replies flow back
-// asynchronously via the foresight_status subscription.
-static void HandleForesightCommand(QString text)
+// Publish the task typed in the UI; acknowledge it to the browser.
+static void HandleMemoTask(QString text)
 {
-    if (foresight_command_pub_)
+    if (memo_task_pub_)
     {
         String msg;
         msg.data = text.toStdString();
-        foresight_command_pub_->publish(msg);
+        memo_task_pub_->publish(msg);
     }
     if (server_)
     {
-        // Immediately echo a "sent" status to acknowledge receipt; downstream
-        // status updates from the planner will overwrite it. The browser
-        // treats this as a no-op for the chat transcript (no motion_text /
-        // motion_image fields), but uses it to update the status pill.
         QJsonObject obj;
-        obj.insert("type", QJsonValue("foresight_response"));
-        obj.insert("state", QJsonValue("sent"));
-        obj.insert("verdict", QJsonValue(QString("")));
-        obj.insert("reason", QJsonValue(QString("")));
-        obj.insert("reflection_id", QJsonValue(static_cast<qint64>(0)));
-        const QString sent_text =
-            QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
-        server_->SendForesightStatus(sent_text);
+        obj.insert("type", QJsonValue("memo_task_ack"));
+        obj.insert("task", QJsonValue(text));
+        server_->SendJson(
+            QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
     }
+}
+
+static QJsonObject GpsToJson(const GPSMsg &m)
+{
+    QJsonObject o;
+    o.insert("lat", QJsonValue(m.latitude));
+    o.insert("lng", QJsonValue(m.longitude));
+    o.insert("heading", QJsonValue(m.heading));
+    return o;
+}
+
+static void OnGps(const GPSMsg::SharedPtr msg)
+{
+    {
+        std::lock_guard<std::mutex> lock(gps_mutex_);
+        last_gps_ = *msg;
+        have_gps_ = true;
+    }
+    if (server_ == nullptr)
+        return;
+    const double now = SteadyNowSec();
+    if (CONFIG_gps_send_rate_hz > 0.0 &&
+        now - last_gps_send_sec_ < 1.0 / CONFIG_gps_send_rate_hz)
+        return;
+    last_gps_send_sec_ = now;
+    QJsonObject obj = GpsToJson(*msg);
+    obj.insert("type", QJsonValue("gps"));
+    server_->SendJson(
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+}
+
+static void SendGpsRouteReply(bool ok, const QString &error,
+                              const std::vector<GPSMsg> &plan)
+{
+    if (server_ == nullptr)
+        return;
+    QJsonObject obj;
+    obj.insert("type", QJsonValue("gps_route"));
+    obj.insert("ok", QJsonValue(ok));
+    if (!error.isEmpty())
+        obj.insert("error", QJsonValue(error));
+    QJsonArray pts;
+    for (const GPSMsg &p : plan)
+        pts.append(GpsToJson(p));
+    obj.insert("plan", pts);
+    server_->SendJson(
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+}
+
+// Send the clicked GPS goals to graph_navigation, starting from the robot's
+// latest fix. The reply (the OSM route) is forwarded to the browser.
+static void HandleGpsGoals(QJsonArray goals)
+{
+    if (!gps_route_client_ || !gps_route_client_->service_is_ready())
+    {
+        SendGpsRouteReply(false, QString("service %1 not available")
+                                     .arg(QString::fromStdString(CONFIG_gps_route_service)),
+                          {});
+        return;
+    }
+    auto req = std::make_shared<GraphNavGPSSrv::Request>();
+    {
+        std::lock_guard<std::mutex> lock(gps_mutex_);
+        if (!have_gps_)
+        {
+            SendGpsRouteReply(false, "no GPS fix yet", {});
+            return;
+        }
+        req->start = last_gps_;
+    }
+    for (const QJsonValue &v : goals)
+    {
+        const QJsonObject g = v.toObject();
+        GPSMsg m;
+        m.header.stamp = node_->now();
+        m.latitude = g.value("lat").toDouble();
+        m.longitude = g.value("lng").toDouble();
+        m.heading = g.value("heading").toDouble(0.0);
+        req->goals.data.push_back(m);
+    }
+    req->goals.header.stamp = node_->now();
+    gps_route_client_->async_send_request(
+        req,
+        [](rclcpp::Client<GraphNavGPSSrv>::SharedFuture future)
+        {
+            const auto resp = future.get();
+            SendGpsRouteReply(!resp->plan.data.empty(),
+                              resp->plan.data.empty() ? "planner returned an empty route" : "",
+                              resp->plan.data);
+        });
+}
+
+static void CreateGpsInterfaces()
+{
+    gps_sub_ = node_->create_subscription<GPSMsg>(
+        CONFIG_gps_fix_topic, rclcpp::SensorDataQoS(),
+        [](const GPSMsg::SharedPtr msg) { OnGps(msg); });
+    gps_route_client_ = node_->create_client<GraphNavGPSSrv>(CONFIG_gps_route_service);
+    if (FLAGS_v > 0)
+    {
+        printf("  GPS fix topic:     %s\n", CONFIG_gps_fix_topic.c_str());
+        printf("  GPS route service: %s\n", CONFIG_gps_route_service.c_str());
+    }
+}
+
+// ---- Sensor health -----------------------------------------------------------
+
+static void CreateSensorHealth()
+{
+    monitored_.clear();
+    const size_t n = CONFIG_health_topics.size();
+    if (CONFIG_health_names.size() != n || CONFIG_health_expected_hz.size() != n ||
+        CONFIG_health_stale_sec.size() != n)
+    {
+        fprintf(stderr,
+                "ERROR: sensor_health.names/topics/expected_hz/stale_sec must "
+                "have the same length; sensor health disabled.\n");
+        return;
+    }
+    for (size_t i = 0; i < n; ++i)
+    {
+        auto t = std::make_unique<MonitoredTopic>();
+        t->name = CONFIG_health_names[i];
+        t->topic = CONFIG_health_topics[i];
+        t->expected_hz = CONFIG_health_expected_hz[i];
+        t->stale_sec = CONFIG_health_stale_sec[i];
+        monitored_.push_back(std::move(t));
+    }
+    diagnostics_pub_ = node_->create_publisher<DiagnosticArray>(
+        CONFIG_health_diagnostics_topic, 10);
+}
+
+// Subscribe to monitored topics that have a publisher in the graph (or whose
+// type changed). A topic that only has subscribers (webviz's own laser/image
+// subscriptions, say) does not count. Best-effort QoS matches both reliable
+// and best-effort publishers.
+static void RefreshSensorSubscriptions()
+{
+    const auto graph = node_->get_topic_names_and_types();
+    for (auto &t : monitored_)
+    {
+        t->publishers = node_->count_publishers(t->topic);
+        const auto it = graph.find(t->topic);
+        if (t->publishers == 0 || it == graph.end() || it->second.empty())
+            continue;
+        const std::string &type = it->second.front();
+        if (t->sub && t->type == type)
+            continue;
+        t->type = type;
+        MonitoredTopic *raw = t.get();
+        // The ROS thread drains callbacks at update_rate_hz, so the queue must
+        // hold a full loop period of messages or faster topics read as capped
+        // at the loop rate. 2x headroom; at least 10 for unknown rates.
+        const size_t depth = std::max<size_t>(
+            10, static_cast<size_t>(std::ceil(
+                    2.0 * t->expected_hz / std::max(1.0, CONFIG_update_rate_hz))));
+        try
+        {
+            t->sub = node_->create_generic_subscription(
+                t->topic, type, rclcpp::SensorDataQoS().keep_last(depth),
+                [raw](std::shared_ptr<const rclcpp::SerializedMessage> msg)
+                {
+                    const double now = SteadyNowSec();
+                    raw->arrivals.push_back(now);
+                    raw->sizes.push_back(msg->size());
+                    raw->last_sec = now;
+                    ++raw->count;
+                });
+        }
+        catch (const std::exception &e)
+        {
+            fprintf(stderr, "WARNING: cannot monitor %s [%s]: %s\n",
+                    t->topic.c_str(), type.c_str(), e.what());
+            t->sub.reset();
+        }
+    }
+}
+
+// Status levels: OK, WARN (rate below half the expected), STALE (no message
+// within stale_sec), MISSING (topic not advertised).
+static void PublishSensorHealth()
+{
+    const double now = SteadyNowSec();
+    QJsonArray sensors;
+    DiagnosticArray diag;
+    diag.header.stamp = node_->now();
+    for (auto &t : monitored_)
+    {
+        while (!t->arrivals.empty() && now - t->arrivals.front() > kRateWindow)
+        {
+            t->arrivals.pop_front();
+            t->sizes.pop_front();
+        }
+        size_t bytes = 0;
+        for (size_t b : t->sizes)
+            bytes += b;
+        const double rate = t->arrivals.size() / kRateWindow;
+        const double age = t->last_sec < 0 ? -1.0 : now - t->last_sec;
+
+        std::string level;
+        if (!t->sub || t->publishers == 0)
+            level = "MISSING";
+        else if (age < 0 || age > t->stale_sec)
+            level = "STALE";
+        else if (t->expected_hz > 0 && rate < 0.5 * t->expected_hz)
+            level = "WARN";
+        else
+            level = "OK";
+
+        QJsonObject o;
+        o.insert("name", QJsonValue(QString::fromStdString(t->name)));
+        o.insert("topic", QJsonValue(QString::fromStdString(t->topic)));
+        o.insert("type", QJsonValue(QString::fromStdString(t->type)));
+        o.insert("level", QJsonValue(QString::fromStdString(level)));
+        o.insert("rate_hz", QJsonValue(rate));
+        o.insert("expected_hz", QJsonValue(t->expected_hz));
+        o.insert("age_sec", QJsonValue(age));
+        o.insert("kbps", QJsonValue(bytes / kRateWindow / 1024.0));
+        o.insert("count", QJsonValue(static_cast<qint64>(t->count)));
+        o.insert("publishers", QJsonValue(static_cast<qint64>(t->publishers)));
+        sensors.append(o);
+
+        DiagnosticStatus st;
+        st.name = "webviz/sensor_health/" + t->name;
+        st.hardware_id = t->topic;
+        st.level = level == "OK"     ? DiagnosticStatus::OK
+                   : level == "WARN" ? DiagnosticStatus::WARN
+                   : level == "STALE" ? DiagnosticStatus::STALE
+                                      : DiagnosticStatus::ERROR;
+        st.message = level;
+        diagnostic_msgs::msg::KeyValue kv;
+        kv.key = "rate_hz";
+        kv.value = std::to_string(rate);
+        st.values.push_back(kv);
+        kv.key = "age_sec";
+        kv.value = std::to_string(age);
+        st.values.push_back(kv);
+        diag.status.push_back(st);
+    }
+    if (diagnostics_pub_)
+        diagnostics_pub_->publish(diag);
+    if (server_ == nullptr)
+        return;
+    QJsonObject obj;
+    obj.insert("type", QJsonValue("sensor_health"));
+    obj.insert("sensors", sensors);
+    server_->SendJson(
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
 }
 
 void CreateSubscriptions()
@@ -728,12 +997,6 @@ void CaptureCurrentConfig()
     current_config_.right_image_queue_size = CONFIG_right_image_queue_size;
     current_config_.image_max_rate_hz = CONFIG_image_max_rate_hz;
     current_config_.image_jpeg_quality = CONFIG_image_jpeg_quality;
-    current_config_.foresight_command_topic = CONFIG_foresight_command_topic;
-    current_config_.foresight_command_topic_qos =
-        CONFIG_foresight_command_topic_qos;
-    current_config_.foresight_status_topic = CONFIG_foresight_status_topic;
-    current_config_.foresight_status_topic_qos =
-        CONFIG_foresight_status_topic_qos;
 }
 
 bool CheckAndUpdateConfiguration()
@@ -774,14 +1037,7 @@ bool CheckAndUpdateConfiguration()
         current_config_.right_image_msg_type != CONFIG_right_image_msg_type ||
         current_config_.right_image_queue_size != CONFIG_right_image_queue_size ||
         current_config_.image_max_rate_hz != CONFIG_image_max_rate_hz ||
-        current_config_.image_jpeg_quality != CONFIG_image_jpeg_quality ||
-        current_config_.foresight_command_topic != CONFIG_foresight_command_topic ||
-        current_config_.foresight_command_topic_qos !=
-            CONFIG_foresight_command_topic_qos ||
-        current_config_.foresight_status_topic !=
-            CONFIG_foresight_status_topic ||
-        current_config_.foresight_status_topic_qos !=
-            CONFIG_foresight_status_topic_qos)
+        current_config_.image_jpeg_quality != CONFIG_image_jpeg_quality)
     {
         other_changed = true;
     }
@@ -890,19 +1146,6 @@ bool CheckAndUpdateConfiguration()
                     printf("  Rebuilding image panel subscriptions.\n");
                 CreateImagePanels();
             }
-            if (current_config_.foresight_command_topic !=
-                    CONFIG_foresight_command_topic ||
-                current_config_.foresight_command_topic_qos !=
-                    CONFIG_foresight_command_topic_qos ||
-                current_config_.foresight_status_topic !=
-                    CONFIG_foresight_status_topic ||
-                current_config_.foresight_status_topic_qos !=
-                    CONFIG_foresight_status_topic_qos)
-            {
-                if (FLAGS_v > 0)
-                    printf("  Rebuilding foresight planner interfaces.\n");
-                CreateForesightPlannerInterfaces();
-            }
         }
 
         CaptureCurrentConfig();
@@ -930,10 +1173,16 @@ void *RosThread(void *arg)
     QObject::connect(
         server_, &RobotWebSocket::ResetNavGoalsSignal, &ResetNavGoals);
     QObject::connect(
-        server_, &RobotWebSocket::ForesightCommandSignal,
+        server_, &RobotWebSocket::MemoTaskSignal,
         server_,
         [](const QString &text)
-        { HandleForesightCommand(text); },
+        { HandleMemoTask(text); },
+        Qt::QueuedConnection);
+    QObject::connect(
+        server_, &RobotWebSocket::SetGpsGoalsSignal,
+        server_,
+        [](const QJsonArray &goals)
+        { HandleGpsGoals(goals); },
         Qt::QueuedConnection);
 
     node_ = rclcpp::Node::make_shared(CONFIG_ros_node_name);
@@ -941,13 +1190,18 @@ void *RosThread(void *arg)
     CreateSubscriptions();
     CreatePublishers();
     CreateImagePanels();
-    CreateForesightPlannerInterfaces();
+    CreateMemoInterfaces();
+    CreateRecordingInterface();
+    CreateGpsInterfaces();
+    CreateSensorHealth();
 
     CaptureCurrentConfig();
 
     RateLoop loop(CONFIG_update_rate_hz);
     int config_check_counter = 0;
     const int config_check_interval = 10; // Check config every 10 loops (~1 second at 10Hz)
+    double last_health_sec = 0.0;
+    double last_discovery_sec = -1e9;
 
     while (rclcpp::ok() && run_.load())
     {
@@ -957,8 +1211,23 @@ void *RosThread(void *arg)
             config_check_counter = 0;
         }
 
+        const double now = SteadyNowSec();
+        if (now - last_discovery_sec > 2.0)
+        {
+            RefreshSensorSubscriptions();
+            last_discovery_sec = now;
+        }
+        if (CONFIG_health_publish_rate_hz > 0 &&
+            now - last_health_sec >= 1.0 / CONFIG_health_publish_rate_hz)
+        {
+            PublishSensorHealth();
+            last_health_sec = now;
+        }
+
         SendUpdate();
-        rclcpp::spin_some(node_);
+        // spin_all drains every queued message (spin_some runs one callback
+        // per subscription, capping sensor-health rates at the loop rate).
+        rclcpp::spin_all(node_, std::chrono::milliseconds(50));
         loop.Sleep();
     }
     return nullptr;
@@ -999,6 +1268,7 @@ int main(int argc, char *argv[])
     QCoreApplication app(argc, argv);
     rclcpp::init(argc, argv);
     signal(SIGINT, SignalHandler);
+    signal(SIGTERM, SignalHandler);  // timeout, docker stop, tmux kill-session
     signal(SIGALRM, SignalHandler);
 
     laser_scan_.header.stamp = rclcpp::Time(0, 0);

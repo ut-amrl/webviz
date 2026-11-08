@@ -28,6 +28,7 @@
 #include <QtCore/QList>
 #include <QtCore/QByteArray>
 #include <QtCore/QString>
+#include <QtCore/QJsonArray>
 #include <deque>
 #include <string>
 #include <vector>
@@ -135,24 +136,23 @@ public:
                    const std::string &topic,
                    const QByteArray &jpeg,
                    double stamp_sec);
-    // Send a foresight planner status update as a JSON text frame to all
-    // connected clients. ``payload_json`` is a pre-serialized JSON document
-    // whose root must be an object containing at minimum a ``type`` field
-    // (e.g. "foresight_response"). Building the JSON in the caller keeps the
-    // signal/slot signature small as the payload schema grows (state,
-    // verdict, reason, reflection_id, thinking_text, motion_text,
-    // critic_text, motion_image_b64, ...).
-    void SendForesightStatus(const QString &payload_json);
+    // Send a JSON text frame to all connected clients. ``payload_json`` is a
+    // pre-serialized JSON object with at least a ``type`` field
+    // ("memo_status", "gps", "gps_route", "sensor_health", ...).
+    // Safe to call from any thread.
+    void SendJson(const QString &payload_json);
 
 Q_SIGNALS:
     void closed();
     void SendDataSignal();
     void SendImageSignal();
-    void SendForesightStatusSignal(QString payload_json);
+    void SendJsonSignal(QString payload_json);
     void SetInitialPoseSignal(float x, float y, float theta, QString map);
     void SetNavGoalSignal(float x, float y, float theta, QString map);
     void ResetNavGoalsSignal();
-    void ForesightCommandSignal(QString text);
+    void MemoTaskSignal(QString text);
+    // [{lat, lng, heading?}, ...] clicked on the map tab.
+    void SetGpsGoalsSignal(QJsonArray goals);
 
 private Q_SLOTS:
     void onNewConnection();
@@ -161,7 +161,7 @@ private Q_SLOTS:
     void socketDisconnected();
     void SendDataSlot();
     void SendImageSlot();
-    void SendForesightStatusSlot(QString payload_json);
+    void SendJsonSlot(QString payload_json);
 
 private:
     void ProcessCallback(const QJsonObject &json);

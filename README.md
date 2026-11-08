@@ -68,6 +68,19 @@ WebViz provides real-time streaming of robot sensor data, localization, and cust
 2. **Open browser**: Load `webviz.html` 
 3. **Connect**: Enter robot IP and click Connect
 
+The **Bags** badge above the tabs turns green and reads **Recording** when
+`/recording` (`std_msgs/Int32`) reports `1`, and gray with **Idle** for `0`.
+It shows **Unknown** while disconnected or after three seconds without recorder
+feedback. The badge is visible on every tab.
+
+In the `memo_ws` workspace, build the Map tab's offline Austin tiles once with
+`scripts/build_map_tiles.sh` inside the container, then serve WebViz with
+`scripts/serve_webviz.py`. The map checks that the tiles exist before loading
+them and reports offline-rendering failures separately from GPS route status.
+The basemap never falls back to public tile servers. Open it through the HTTP
+server, including from a laptop using the robot URL or an SSH tunnel for ports
+10273 (HTTP) and 10272 (WebSocket). A standalone HTML file cannot access the tiles.
+
 See `config/webviz_config.lua` for complete configuration options.
 
 ### Integration with Launch Files

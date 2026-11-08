@@ -3,35 +3,120 @@
 
 <head>
   <meta charset="utf-8" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <title>memo webviz</title>
+  <!-- Vendored (vendor/) so the page works offline. -->
+  <link rel="stylesheet" href="vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="vendor/maplibre/maplibre-gl.js"></script>
+  <script src="vendor/maplibre/leaflet-maplibre-gl.js"></script>
+  <script src="map_style.js"></script>
+  <script src="offline_map.js"></script>
   <style>
     /* Bootstrap covers the rest; only retain things Bootstrap does not. */
-    #canvas {
+    /* Robot tab fills the viewport under the header so the images, the
+       sideways chat, and the point cloud are on screen together. */
+    body.robot-view {
+      height: 100vh;
+      overflow: hidden;
+    }
+    body.robot-view .container-fluid {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #tab-robot.tab-pane-x.active {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    .robot-media-row {
+      display: flex;
+      flex-direction: row;
+      gap: 8px;
+      flex: 0 0 9.5rem;
+      min-height: 0;
+    }
+    .robot-image-card,
+    .robot-chat-card {
+      margin-bottom: 0;
+      min-width: 0;
+      min-height: 0;
+    }
+    .robot-image-card {
+      flex: 0 0 16rem;
+    }
+    .robot-chat-card {
+      flex: 1 1 auto;
+    }
+    .robot-image-card .card-body,
+    .robot-chat-card .card-body {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .robot-map {
+      position: relative;
+      /* Do not let the column shrink this away. The height is whatever
+         the viewport has left under the header, task, and image row. */
+      flex: 0 0 auto;
+      height: calc(100vh - 27.5rem);
+      min-height: 9rem;
       background: #fff;
+    }
+    .robot-map .text-muted {
+      position: absolute;
+      left: 4px;
+      bottom: 0;
+      z-index: 1;
+    }
+
+    #canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
       width: 100%;
-      height: 70vh;
+      height: calc(100% - 16px);
+      background: #fff;
+      display: block;
       user-select: none;
       outline: none;
     }
 
     .panel-image {
       width: 100%;
-      max-height: 30vh;
+      flex: 1 1 auto;
+      height: 0;
+      min-height: 0;
       object-fit: contain;
       background: #f0f0f0;
     }
 
-    /* Chat transcript: thinking bubbles align left (muted, italic) and
-       lead the turn, motion bubbles align left, critic bubbles right.
-       Bubbles are intentionally narrow so long completions wrap cleanly. */
+    /* Chat is a horizontal strip: oldest bubble on the left, newest on
+       the right, with its own sideways scrollbar. */
     #chatHistory {
-      max-height: 50vh;
-      overflow-y: auto;
-      padding-right: 4px;
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      gap: 8px;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-x: scroll;
+      overflow-y: hidden;
+      padding-bottom: 2px;
     }
 
     .chat-bubble {
-      max-width: 85%;
+      flex: 0 0 14rem;
+      max-width: 14rem;
+      align-self: stretch;
+      overflow-x: hidden;
+      overflow-y: auto;
       border-radius: 8px;
       padding: 6px 8px;
       font-size: 0.8rem;
@@ -43,28 +128,23 @@
     .chat-bubble-thinking {
       background: #f3f4f6;
       color: #495057;
-      align-self: flex-start;
       font-style: italic;
     }
 
     .chat-bubble-motion {
       background: #e7f1ff;
       color: #0b3d91;
-      align-self: flex-start;
     }
 
     .chat-bubble-critic {
       background: #f4e7ff;
       color: #4a148c;
-      align-self: flex-end;
     }
 
     .chat-bubble-user {
       background: #e2e3e5;
       color: #212529;
-      align-self: center;
       font-weight: 500;
-      max-width: 95%;
     }
 
     .chat-thumb {
@@ -81,12 +161,47 @@
       opacity: 0.75;
       margin-bottom: 2px;
     }
+
+    /* Tabs: one pane visible at a time, selected by the URL hash. */
+    .tab-pane-x { display: none; }
+    .tab-pane-x.active { display: block; }
+    .nav-tabs .nav-link { cursor: pointer; }
+    .nav-tabs .nav-link.active {
+      font-weight: 600;
+      color: #212529;
+      background: #fff;
+      border-color: #dee2e6 #dee2e6 #fff;
+    }
+
+    /* Sensor health */
+    .health-pill {
+      display: inline-block;
+      min-width: 5.5em;
+      text-align: center;
+      font-weight: 600;
+    }
+    .health-OK { background: #198754; color: #fff; }
+    .health-WARN { background: #ffc107; color: #212529; }
+    .health-STALE { background: #dc3545; color: #fff; }
+    .health-MISSING { background: #6c757d; color: #fff; }
+    #healthTable td, #healthTable th { vertical-align: middle; }
+    #healthTable td.num { font-variant-numeric: tabular-nums; text-align: right; }
+    #healthSummary .badge { font-size: 0.95rem; }
+    .health-disconnected { opacity: 0.45; }
+
+    /* GPS map */
+    #gpsMap {
+      width: 100%;
+      height: 75vh;
+      border-radius: 4px;
+    }
+    .robot-heading-icon { background: none; border: none; }
   </style>
 </head>
 
 <body class="bg-light">
   <div class="container-fluid py-2">
-    <h4 class="mb-2">UT AUTOmata Web Interface</h4>
+    <h4 class="mb-2">memo &middot; Spot Web Interface</h4>
 
     <div class="row g-2 align-items-center mb-2">
       <div class="col-auto">
@@ -101,6 +216,11 @@
       <div class="col-auto">
         <span class="text-muted small">Status:</span>
         <span id="status" class="badge bg-secondary">Disconnected</span>
+      </div>
+      <div class="col-auto">
+        <span class="text-muted small">Bags:</span>
+        <span id="recordingStatus" class="badge bg-secondary" role="status"
+          aria-live="polite">Unknown</span>
       </div>
       <div class="col-auto">
         <label for="map" class="col-form-label">Map:</label>
@@ -127,6 +247,69 @@
       </div>
     </div>
 
+    <ul class="nav nav-tabs mb-2" id="tabNav">
+      <li class="nav-item"><a class="nav-link" data-tab="health" href="#health">Sensor Health</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="map" href="#map">Map</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="robot" href="#robot">Robot</a></li>
+    </ul>
+
+    <!-- Sensor Health -->
+    <div id="tab-health" class="tab-pane-x">
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-2" id="healthSummary">
+        <span class="badge health-OK" id="healthCountOK">0 OK</span>
+        <span class="badge health-WARN" id="healthCountWARN">0 WARN</span>
+        <span class="badge health-STALE" id="healthCountSTALE">0 STALE</span>
+        <span class="badge health-MISSING" id="healthCountMISSING">0 MISSING</span>
+        <span class="text-muted small ms-2">Updated: <span id="healthUpdated">never</span></span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover bg-white" id="healthTable">
+          <thead>
+            <tr>
+              <th>Sensor</th>
+              <th>Status</th>
+              <th class="text-end">Rate (Hz)</th>
+              <th class="text-end">Expected</th>
+              <th class="text-end">Age (s)</th>
+              <th class="text-end">kB/s</th>
+              <th class="text-end">Msgs</th>
+              <th>Topic</th>
+            </tr>
+          </thead>
+          <tbody id="healthBody">
+            <tr><td colspan="8" class="text-muted">Waiting for the websocket server...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- GPS map -->
+    <div id="tab-map" class="tab-pane-x">
+      <div class="row g-2 align-items-center mb-2">
+        <div class="col-auto">
+          <button type="button" id="gpsAddGoals" class="btn btn-sm btn-outline-primary" onclick="toggleGpsGoalMode()">Add GPS
+            Goals</button>
+        </div>
+        <div class="col-auto">
+          <button type="button" id="gpsSend" class="btn btn-sm btn-primary" onclick="sendGpsGoals()">Plan Route</button>
+        </div>
+        <div class="col-auto">
+          <button type="button" id="gpsClear" class="btn btn-sm btn-outline-danger" onclick="clearGpsGoals()">Clear</button>
+        </div>
+        <div class="col-auto">
+          <button type="button" id="gpsFollow" class="btn btn-sm btn-outline-secondary" onclick="toggleGpsFollow()">Follow
+            Robot</button>
+        </div>
+        <div class="col-auto small text-muted">
+          Robot: <span id="gpsRobot">no fix</span> &middot; <span id="gpsStatus">click "Add GPS Goals", then the map</span>
+          &middot; <span id="gpsMapStatus" role="status">Loading map...</span>
+        </div>
+      </div>
+      <div id="gpsMap"></div>
+    </div>
+
+    <!-- Robot: local map, cameras and the memo planner -->
+    <div id="tab-robot" class="tab-pane-x">
     <div class="row g-2 mb-2">
       <div class="col-auto">
         <button type="button" id="setLocation" class="btn btn-sm btn-outline-secondary"
@@ -186,58 +369,57 @@
       </div>
     </div>
 
-    <div class="row g-2">
-      <div class="col-9">
-        <canvas id="canvas" width="800" height="600" tabindex="0"></canvas>
-        <div class="text-muted small mt-1"><span id="coords">0,0</span></div>
-      </div>
-      <div class="col-3">
-        <div class="card mb-2">
-          <div class="card-body p-2">
-            <div class="text-muted small">Left panel</div>
-            <img id="imgLeft" class="panel-image" alt="left panel">
+    <div class="card mb-2">
+      <div class="card-body p-2">
+        <div class="row g-2 align-items-center">
+          <div class="col">
+            <input type="text" id="memoInput" class="form-control form-control-sm"
+              placeholder="Task for memo (e.g. follow the sidewalk to the next waypoint)..." />
           </div>
-        </div>
-        <div class="card mb-2">
-          <div class="card-body p-2">
-            <div class="text-muted small">Observation history (oldest -> current)</div>
-            <img id="imgRight" class="panel-image" alt="observation mosaic">
+          <div class="col-auto">
+            <button type="button" id="memoSend" class="btn btn-sm btn-primary"
+              onclick="sendMemoTask()">Send</button>
           </div>
-        </div>
-        <div class="card mb-2">
-          <div class="card-body p-2">
-            <div class="text-muted small d-flex justify-content-between align-items-center">
-              <span>Planner conversation</span>
-              <span class="small">refl <span id="foresightReflection">0</span></span>
-            </div>
-            <div id="chatHistory" class="d-flex flex-column gap-2 mt-1"></div>
+          <div class="col-auto">
+            <button type="button" id="memoReset" class="btn btn-sm btn-secondary"
+              onclick="sendResetNavGoals()">Reset Nav</button>
+          </div>
+          <div class="col-auto text-muted small">
+            Planner status: <span id="memoStatus">idle</span>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="card mt-2">
-      <div class="card-body p-2">
-        <div class="row g-2 align-items-center">
-          <div class="col">
-            <input type="text" id="foresightInput" class="form-control form-control-sm"
-              placeholder="Type language command..." />
-          </div>
-          <div class="col-auto">
-            <button type="button" id="foresightSend" class="btn btn-sm btn-primary"
-              onclick="sendForesightCommand()">Send</button>
-          </div>
-          <div class="col-auto">
-            <button type="button" id="foresightReset" class="btn btn-sm btn-secondary"
-              onclick="sendResetNavGoals()">Reset Nav</button>
-          </div>
+    <div class="robot-media-row mb-2">
+      <div class="card robot-image-card">
+        <div class="card-body p-2">
+          <div class="text-muted small">Left panel</div>
+          <img id="imgLeft" class="panel-image" alt="most recent camera image">
         </div>
-        <div class="text-muted small mt-1">
-          Planner status: <span id="foresightStatus">idle</span>
-          (reflection <span id="foresightReflection">0</span>)
+      </div>
+      <div class="card robot-image-card">
+        <div class="card-body p-2">
+          <div class="text-muted small">Memo plan</div>
+          <img id="imgRight" class="panel-image" alt="memo plan image">
+        </div>
+      </div>
+      <div class="card robot-chat-card">
+        <div class="card-body p-2">
+          <div class="text-muted small d-flex justify-content-between align-items-center">
+            <span>Memo planner</span>
+            <span class="small">plans <span id="memoPlanCount">0</span></span>
+          </div>
+          <div id="chatHistory"></div>
         </div>
       </div>
     </div>
+
+    <div class="robot-map">
+      <canvas id="canvas" width="800" height="600" tabindex="0"></canvas>
+      <div class="text-muted small"><span id="coords">0,0</span></div>
+    </div>
+    </div> <!-- tab-robot -->
   </div>
 
   <script type="text/javascript" type="text/javascript">
@@ -304,8 +486,10 @@
     function resizeCanvasToContainer() {
       const parent = canvas.parentElement;
       if (!parent) return;
-      const newWidth = parent.clientWidth;
-      const newHeight = Math.max(400, Math.round(window.innerHeight * 0.7));
+      const rect = canvas.getBoundingClientRect();
+      const newWidth = Math.round(rect.width);
+      const newHeight = Math.round(rect.height);
+      if (newWidth < 2 || newHeight < 2) return;
       const widthChanged = canvas.width !== newWidth;
       const heightChanged = canvas.height !== newHeight;
       canvas.width = newWidth;
@@ -607,8 +791,8 @@
       }
 
       onclose(e) {
-        if (event.wasClean) {
-          console.log(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);
+        if (e.wasClean) {
+          console.log(`[close] Connection closed cleanly, code=${e.code} reason=${e.reason}`);
         } else {
           // e.g. server process killed or network down
           // event.code is usually 1006 in this case
@@ -621,7 +805,7 @@
 
       onerror(error) {
         console.log(`[error] ${error.message}`);
-        if (this.callbacks.onerror) this.callbacks.onerror(e);
+        if (this.callbacks.onerror) this.callbacks.onerror(error);
       }
 
       // Connect to a host.
@@ -991,6 +1175,23 @@
       const isConnected = /^Connected/i.test(str);
       s.classList.toggle('bg-success', isConnected);
       s.classList.toggle('bg-secondary', !isConnected);
+      if (!isConnected) setRecordingStatus(null);
+    }
+
+    // Only fresh recorder feedback may turn this badge green. Losing the
+    // recorder while the websocket stays up must also clear the indication.
+    var recordingStatusTimer = null;
+
+    function setRecordingStatus(recording) {
+      clearTimeout(recordingStatusTimer);
+      const badge = document.getElementById('recordingStatus');
+      badge.textContent = recording === true ? 'Recording' :
+        recording === false ? 'Idle' : 'Unknown';
+      badge.classList.toggle('bg-success', recording === true);
+      badge.classList.toggle('bg-secondary', recording !== true);
+      if (typeof recording === 'boolean') {
+        recordingStatusTimer = setTimeout(() => setRecordingStatus(null), 3000);
+      }
     }
 
     function receiveData(d) {
@@ -1024,22 +1225,13 @@
       setPanelImage(frame.panel_id, frame.jpegBytes);
     }
 
-    function setForesightStatus(text, reflectionId) {
-      document.getElementById('foresightStatus').textContent = text;
-      if (typeof reflectionId === 'number') {
-        document.getElementById('foresightReflection').textContent =
-          String(reflectionId);
-      }
+    function setMemoStatus(text) {
+      document.getElementById('memoStatus').textContent = text;
     }
 
-    // Chat transcript: thinking / motion (left) and critic (right) bubbles
-    // accumulate across planning iterations and across graph_navigation
-    // auto-replans. The conversation persists until the user starts a new
-    // language command (sendForesightCommand) or hits reset
-    // (sendResetNavGoals); both call clearChatHistory(). We intentionally
-    // do NOT dedup or auto-reset on header.stamp because graph_navigation
-    // will keep retriggering the planner with fresh stamps for the same
-    // mission, and each replan is a legitimate new entry in the chat.
+    // Planner transcript: the task bubble, then one bubble per memo plan
+    // (status JSON from /memo/status), trimmed to the configured history.
+    // Cleared by a new task (sendMemoTask) or reset (sendResetNavGoals).
 
     function chatHistoryMaxTurns() {
       const v = parseInt(
@@ -1084,7 +1276,7 @@
       }
       root.appendChild(bubble);
       trimChatHistoryToMax();
-      root.scrollTop = root.scrollHeight;
+      root.scrollLeft = root.scrollWidth;
     }
 
     function appendUserBubble(text) {
@@ -1097,7 +1289,7 @@
     }
 
     function appendMotionBubble(reflectionId, text, imageB64) {
-      const meta = `motion &middot; refl ${reflectionId}`;
+      const meta = `plan #${reflectionId}`;
       appendChatBubble('motion', meta, text, imageB64);
     }
 
@@ -1118,80 +1310,280 @@
       appendChatBubble('critic', meta, body, null);
     }
 
-    function sendForesightCommand() {
+    function sendMemoTask() {
       if (!robot_interface || !robot_interface.socket) {
-        setForesightStatus('not connected');
+        setMemoStatus('not connected');
         return;
       }
-      const input = document.getElementById('foresightInput');
+      const input = document.getElementById('memoInput');
       const text = input.value.trim();
       if (!text) return;
       robot_interface.socket.send(JSON.stringify({
-        type: 'foresight_command',
+        type: 'memo_task',
         text: text,
       }));
-      setForesightStatus('sending...', 0);
+      setMemoStatus('sending...');
       clearChatHistory();
       appendUserBubble(text);
     }
 
     function sendResetNavGoals() {
       if (!robot_interface || !robot_interface.socket) {
-        setForesightStatus('not connected');
+        setMemoStatus('not connected');
         return;
       }
       robot_interface.socket.send(JSON.stringify({
         type: 'reset_nav_goals',
       }));
-      setForesightStatus('reset', 0);
+      setMemoStatus('reset');
       clearChatHistory();
     }
 
-    function onForesightResponse(json) {
-      const state = json.state || '';
-      const reflectionId =
-        typeof json.reflection_id === 'number' ? json.reflection_id : 0;
-      setForesightStatus(state || 'unknown', reflectionId);
-      // The "sent" echo from HandleForesightCommand carries no chat content;
-      // skip emitting bubbles for it.
-      if (state === 'sent') return;
+    var memoPlanCount = 0;
 
-      const thinkingText = json.thinking_text || '';
-      const motionText = json.motion_text || '';
-      const motionImg = json.motion_image_b64 || '';
-      const criticText = json.critic_text || '';
-      const verdict = json.verdict || '';
-      const reason = json.reason || '';
+    function fmtNum(v, digits) {
+      return (typeof v === 'number' && isFinite(v)) ? v.toFixed(digits) : '-';
+    }
 
-      // Render bubbles in fixed conversation order (thinking -> motion ->
-      // critic). Each section is independently gated on having content, so
-      // ECoT (thinking + motion), reflect (motion + critic), or full
-      // (thinking + motion + critic) flows all render correctly. The
-      // thinking trace is only populated on refl=0 by the planner. Bubbles
-      // accumulate across iterations and across graph_navigation replans;
-      // the chat is only cleared by an explicit user action (new language
-      // command or reset nav goals).
-      if (thinkingText) {
-        appendThinkingBubble(reflectionId, thinkingText);
+    // One bubble per plan: a compact summary of the status JSON. Timing keys
+    // vary by backend, so every *_ms field is listed.
+    function onMemoStatus(json) {
+      const st = json.status;
+      memoPlanCount += 1;
+      document.getElementById('memoPlanCount').textContent = String(memoPlanCount);
+      if (typeof st !== 'object' || st === null) {
+        setMemoStatus(String(st));
+        appendMotionBubble(memoPlanCount, String(st), null);
+        return;
       }
-      if (motionText || motionImg) {
-        appendMotionBubble(reflectionId, motionText, motionImg);
-      }
-      if (criticText || reason || verdict) {
-        appendCriticBubble(reflectionId, criticText, verdict, reason);
-      }
+      const parts = [];
+      if (st.views !== undefined) parts.push(`views ${st.views}`);
+      const timing = Object.assign({}, st.timing || {}, st);
+      Object.keys(timing).filter(k => /_ms$/.test(k)).forEach(k => {
+        parts.push(`${k.replace(/_ms$/, '')} ${fmtNum(timing[k], 1)} ms`);
+      });
+      if (st.task) parts.push(`task "${st.task}"`);
+      setMemoStatus(`planned (${new Date().toLocaleTimeString()})`);
+      appendMotionBubble(memoPlanCount, parts.join(' \u00b7 ') || JSON.stringify(st), null);
     }
 
     function processJsonData(json) {
-      if (json && json.type === 'foresight_response') {
-        onForesightResponse(json);
-        return;
+      if (!json) return;
+      switch (json.type) {
+        case 'sensor_health': onSensorHealth(json); return;
+        case 'recording_status': setRecordingStatus(json.recording); return;
+        case 'gps': onRobotGps(json); return;
+        case 'gps_route': onGpsRoute(json); return;
+        case 'memo_status': onMemoStatus(json); return;
+        case 'memo_task_ack': setMemoStatus('task sent'); return;
       }
-      if (json && json.error) {
+      if (json.error) {
         console.warn('Server error:', json.error);
+        if (/gps/i.test(json.error)) setGpsStatus(json.error);
         return;
       }
       console.log('Received JSON:', json);
+    }
+
+    // ---- Tabs ------------------------------------------------------------
+    // The URL hash selects the tab (#health, #map, #robot); Sensor Health is
+    // the default so the robot display opens on it.
+    const TABS = ['health', 'map', 'robot'];
+
+    function currentTab() {
+      const h = (window.location.hash || '').replace('#', '');
+      return TABS.includes(h) ? h : 'health';
+    }
+
+    function showTab(name) {
+      TABS.forEach(t => {
+        document.getElementById('tab-' + t).classList.toggle('active', t === name);
+      });
+      document.querySelectorAll('#tabNav .nav-link').forEach(a => {
+        a.classList.toggle('active', a.dataset.tab === name);
+      });
+      document.body.classList.toggle('robot-view', name === 'robot');
+      if (name === 'map' && gpsMap) setTimeout(() => gpsMap.invalidateSize(), 0);
+      if (name === 'robot') resizeCanvasToContainer();
+    }
+    window.addEventListener('hashchange', () => showTab(currentTab()));
+
+    // ---- Sensor health -----------------------------------------------------
+    var lastHealthTime = 0;
+
+    function onSensorHealth(json) {
+      lastHealthTime = Date.now();
+      const counts = { OK: 0, WARN: 0, STALE: 0, MISSING: 0 };
+      const body = document.getElementById('healthBody');
+      const rows = (json.sensors || []).map(sn => {
+        counts[sn.level] = (counts[sn.level] || 0) + 1;
+        const tr = document.createElement('tr');
+        const cells = [
+          sn.name,
+          null,
+          fmtNum(sn.rate_hz, 1),
+          sn.expected_hz > 0 ? fmtNum(sn.expected_hz, 0) : '-',
+          sn.age_sec >= 0 ? fmtNum(sn.age_sec, 2) : 'never',
+          fmtNum(sn.kbps, 1),
+          String(sn.count),
+          sn.topic + (sn.type ? `  [${sn.type}]` : ''),
+        ];
+        cells.forEach((c, i) => {
+          const td = document.createElement('td');
+          if (i === 1) {
+            const pill = document.createElement('span');
+            pill.className = `badge health-pill health-${sn.level}`;
+            pill.textContent = sn.level;
+            td.appendChild(pill);
+          } else {
+            td.textContent = c;
+            if (i >= 2 && i <= 6) td.className = 'num';
+            if (i === 7) td.className = 'small text-muted';
+            if (i === 0) td.className = 'fw-semibold';
+          }
+          tr.appendChild(td);
+        });
+        return tr;
+      });
+      body.replaceChildren(...rows);
+      Object.keys(counts).forEach(k => {
+        const el = document.getElementById('healthCount' + k);
+        if (el) el.textContent = `${counts[k]} ${k}`;
+      });
+      document.getElementById('healthUpdated').textContent = new Date().toLocaleTimeString();
+      document.getElementById('healthTable').classList.remove('health-disconnected');
+    }
+
+    // Grey the table out when updates stop (server down or disconnected).
+    setInterval(() => {
+      if (Date.now() - lastHealthTime > 3000) {
+        document.getElementById('healthTable').classList.add('health-disconnected');
+      }
+    }, 1000);
+
+    // ---- GPS map -------------------------------------------------------------
+    var gpsMap = undefined;
+    var gpsRobotMarker = undefined;
+    var gpsGoalMarkers = [];
+    var gpsGoals = [];
+    var gpsRouteLine = undefined;
+    var gpsRouteMarkers = [];
+    var gpsGoalMode = false;
+    var gpsFollow = true;
+    var gpsCentered = false;
+
+    function setGpsStatus(text) {
+      document.getElementById('gpsStatus').textContent = text;
+    }
+
+    async function initGpsMap() {
+      if (typeof L === 'undefined') {
+        document.getElementById('gpsMapStatus').textContent = 'Map library failed to load';
+        return;
+      }
+      // UT Austin campus until the first fix arrives.
+      gpsMap = L.map('gpsMap').setView([30.2849, -97.7341], 18);
+      gpsMap.on('click', (e) => {
+        if (!gpsGoalMode) return;
+        addGpsGoal(e.latlng.lat, e.latlng.lng);
+      });
+      gpsMap.on('dragstart', () => { if (gpsFollow) toggleGpsFollow(); });
+      document.getElementById('gpsFollow').classList.toggle('active', gpsFollow);
+
+      const mapStatus = document.getElementById('gpsMapStatus');
+      await loadOfflineGpsMap(gpsMap, mapStatus, window.location.origin);
+    }
+
+    function robotIcon(headingDeg) {
+      // Arrow pointing along the heading (degrees from true north, clockwise).
+      const svg = `<svg width="28" height="28" viewBox="-14 -14 28 28" xmlns="http://www.w3.org/2000/svg">
+        <g transform="rotate(${headingDeg || 0})">
+          <circle r="11" fill="#0d6efd" fill-opacity="0.25" stroke="#0d6efd" stroke-width="1.5"/>
+          <path d="M0,-11 L6,6 L0,2 L-6,6 Z" fill="#0d6efd"/>
+        </g></svg>`;
+      return L.divIcon({ html: svg, className: 'robot-heading-icon', iconSize: [28, 28], iconAnchor: [14, 14] });
+    }
+
+    function onRobotGps(json) {
+      document.getElementById('gpsRobot').textContent =
+        `${fmtNum(json.lat, 6)}, ${fmtNum(json.lng, 6)} @ ${fmtNum(json.heading, 0)}\u00b0`;
+      if (!gpsMap) return;
+      const ll = [json.lat, json.lng];
+      if (!gpsRobotMarker) {
+        gpsRobotMarker = L.marker(ll, { icon: robotIcon(json.heading), zIndexOffset: 1000 }).addTo(gpsMap);
+      } else {
+        gpsRobotMarker.setLatLng(ll);
+        gpsRobotMarker.setIcon(robotIcon(json.heading));
+      }
+      if (gpsFollow || !gpsCentered) {
+        gpsMap.panTo(ll, { animate: gpsCentered });
+        gpsCentered = true;
+      }
+    }
+
+    function addGpsGoal(lat, lng) {
+      gpsGoals.push({ lat: lat, lng: lng });
+      const m = L.circleMarker([lat, lng], { radius: 7, color: '#dc3545', fillOpacity: 0.8 })
+        .bindTooltip(String(gpsGoals.length), { permanent: true, direction: 'top' })
+        .addTo(gpsMap);
+      gpsGoalMarkers.push(m);
+      setGpsStatus(`${gpsGoals.length} goal(s); "Plan Route" sends them to graph_navigation`);
+    }
+
+    function toggleGpsGoalMode() {
+      gpsGoalMode = !gpsGoalMode;
+      document.getElementById('gpsAddGoals').classList.toggle('active', gpsGoalMode);
+      if (gpsGoalMode) setGpsStatus('click the map to add goals in order');
+    }
+
+    function toggleGpsFollow() {
+      gpsFollow = !gpsFollow;
+      document.getElementById('gpsFollow').classList.toggle('active', gpsFollow);
+    }
+
+    function clearGpsRoute() {
+      if (gpsRouteLine) { gpsRouteLine.remove(); gpsRouteLine = undefined; }
+      gpsRouteMarkers.forEach(m => m.remove());
+      gpsRouteMarkers = [];
+    }
+
+    function clearGpsGoals() {
+      gpsGoals = [];
+      gpsGoalMarkers.forEach(m => m.remove());
+      gpsGoalMarkers = [];
+      clearGpsRoute();
+      setGpsStatus('cleared');
+      if (robot_interface && robot_interface.socket) {
+        robot_interface.socket.send(JSON.stringify({ type: 'reset_nav_goals' }));
+      }
+    }
+
+    function sendGpsGoals() {
+      if (!robot_interface || !robot_interface.socket) {
+        setGpsStatus('not connected');
+        return;
+      }
+      if (gpsGoals.length === 0) {
+        setGpsStatus('add at least one goal first');
+        return;
+      }
+      robot_interface.socket.send(JSON.stringify({ type: 'set_gps_goals', goals: gpsGoals }));
+      setGpsStatus('planning route...');
+      if (gpsGoalMode) toggleGpsGoalMode();
+    }
+
+    function onGpsRoute(json) {
+      clearGpsRoute();
+      if (!json.ok) {
+        setGpsStatus('route failed: ' + (json.error || 'unknown error'));
+        return;
+      }
+      const pts = (json.plan || []).map(p => [p.lat, p.lng]);
+      if (gpsMap && pts.length > 0) {
+        gpsRouteLine = L.polyline(pts, { color: '#0d6efd', weight: 4, opacity: 0.8 }).addTo(gpsMap);
+        gpsRouteMarkers = pts.map(ll => L.circleMarker(ll, { radius: 3, color: '#0d6efd', fillOpacity: 1 }).addTo(gpsMap));
+      }
+      setGpsStatus(`route planned: ${pts.length} waypoints`);
     }
 
     function setConnectButton(connected) {
@@ -1206,6 +1598,20 @@
       robot_interface = undefined;
       setConnectButton(false);
       updateStatus(`Disconnected`);
+      scheduleReconnect();
+    }
+
+    // ?autoconnect=1 (the robot display) keeps retrying, so the page can be
+    // opened before the websocket server is up and survives its restarts.
+    // The Connect/Disconnect button turns retrying off.
+    var autoReconnect = false;
+    var reconnectTimer = undefined;
+    function scheduleReconnect() {
+      if (!autoReconnect || reconnectTimer) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = undefined;
+        if (!robot_interface) connect(true);
+      }, 2000);
     }
 
     function onopen(event) {
@@ -1227,9 +1633,10 @@
       updateStatus(`Connected to ${ipaddr}:${port}`);
     }
 
-    function connect() {
+    function connect(fromRetry) {
       if (robot_interface) {
         // Disconnect.
+        autoReconnect = false;
         robot_interface.close();
         setConnectButton(false);
         robot_interface = undefined;
@@ -1260,15 +1667,25 @@
     }
 
     window.onload = function () {
+      showTab(currentTab());
       drawLoop();
-      const fInput = document.getElementById('foresightInput');
-      if (fInput) {
-        fInput.addEventListener('keydown', (e) => {
+      initGpsMap();
+      const mInput = document.getElementById('memoInput');
+      if (mInput) {
+        mInput.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            sendForesightCommand();
+            sendMemoTask();
           }
         });
+      }
+      // ?host=<ip>&port=<port>&autoconnect=1 (used by the robot display).
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('host')) document.getElementById('ipaddr').value = params.get('host');
+      if (params.get('port')) document.getElementById('port').value = params.get('port');
+      if (params.get('autoconnect') === '1') {
+        autoReconnect = true;
+        connect(true);
       }
     };
 
@@ -1560,7 +1977,7 @@
       drawLine("#00AF00", 0, 0, 0, 1.5);
     }
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 
 </html>

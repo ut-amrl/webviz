@@ -36,6 +36,7 @@
 #include <QtWebSockets/qwebsocketserver.h>
 #include <QtWebSockets/qwebsocket.h>
 #include <QtCore/QDebug>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
@@ -97,8 +98,8 @@ RobotWebSocket::RobotWebSocket(uint16_t port) : ws_server_(new QWebSocketServer(
             this, &RobotWebSocket::SendDataSlot);
     connect(this, &RobotWebSocket::SendImageSignal,
             this, &RobotWebSocket::SendImageSlot);
-    connect(this, &RobotWebSocket::SendForesightStatusSignal,
-            this, &RobotWebSocket::SendForesightStatusSlot);
+    connect(this, &RobotWebSocket::SendJsonSignal,
+            this, &RobotWebSocket::SendJsonSlot);
     // Initialize localization time stamp to zero.
     localization_.header.stamp = rclcpp::Time(0, 0);
 }
@@ -468,14 +469,33 @@ void RobotWebSocket::ProcessCallback(const QJsonObject &json)
     {
         ResetNavGoalsSignal();
     }
-    else if (type == "foresight_command")
+    else if (type == "memo_task")
     {
         if (!StringKeyPresent("text", json))
         {
-            SendError("Invalid foresight_command parameters");
+            SendError("Invalid memo_task parameters");
             return;
         }
-        ForesightCommandSignal(json.value("text").toString());
+        MemoTaskSignal(json.value("text").toString());
+    }
+    else if (type == "set_gps_goals")
+    {
+        const QJsonArray goals = json.value("goals").toArray();
+        if (goals.isEmpty())
+        {
+            SendError("Invalid set_gps_goals parameters");
+            return;
+        }
+        for (const QJsonValue &g : goals)
+        {
+            if (!g.isObject() ||
+                !AllNumericalKeysPresent({"lat", "lng"}, g.toObject()))
+            {
+                SendError("Invalid set_gps_goals parameters");
+                return;
+            }
+        }
+        SetGpsGoalsSignal(goals);
     }
     else
     {
@@ -563,17 +583,17 @@ void RobotWebSocket::SendImageSlot()
     }
 }
 
-void RobotWebSocket::SendForesightStatus(const QString &payload_json)
+void RobotWebSocket::SendJson(const QString &payload_json)
 {
-    SendForesightStatusSignal(payload_json);
+    SendJsonSignal(payload_json);
 }
 
-void RobotWebSocket::SendForesightStatusSlot(QString payload_json)
+void RobotWebSocket::SendJsonSlot(QString payload_json)
 {
     if (FLAGS_v > 0)
     {
         fprintf(stderr,
-                "[fs] slot fired clients=%zu bytes=%d\n",
+                "[json] slot fired clients=%zu bytes=%d\n",
                 clients_.size(),
                 static_cast<int>(payload_json.size()));
     }
