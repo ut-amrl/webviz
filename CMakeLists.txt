@@ -93,7 +93,7 @@ install(TARGETS websocket
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(FILES webviz.html map_style.js offline_map.js
+install(FILES webviz.html map_style.js offline_map.js viz_style.js
   DESTINATION share/${PROJECT_NAME}
 )
 

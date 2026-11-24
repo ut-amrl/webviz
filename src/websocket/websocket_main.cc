@@ -84,6 +84,7 @@ using std::vector;
 using std_msgs::msg::Empty;
 using std_msgs::msg::String;
 
+DEFINE_bool(use_sim_time, false, "Use the ROS clock from bag playback");
 DEFINE_double(fps, 10.0, "Max visualization frames rate.");
 DEFINE_double(max_age, 2.0, "Maximum age of a message before it gets dropped.");
 DEFINE_string(config_file, "", "Path to config file; defaults to the installed share/webviz/config/webviz_config.lua");
@@ -139,6 +140,9 @@ CONFIG_INT(image_jpeg_quality, "image_streaming.jpeg_quality");
 // planner's JSON status (std_msgs/String) on ``status_topic`` is forwarded.
 CONFIG_STRING(memo_task_topic, "memo.task_topic");
 CONFIG_STRING(memo_status_topic, "memo.status_topic");
+CONFIG_STRING(memo_ui_frame_topic, "memo.ui_frame_topic");
+CONFIG_STRING(memo_preferences_topic, "memo.preferences_topic");
+CONFIG_STRING(memo_preferences_state_topic, "memo.preferences_state_topic");
 
 // GPS navigation: the robot fix (amrl_msgs/GPSMsg) is forwarded to the map
 // tab; GPS goals clicked on the map are sent to graph_navigation's
@@ -239,6 +243,8 @@ namespace
     // Memo planner: task commands out, JSON status in.
     rclcpp::Publisher<String>::SharedPtr memo_task_pub_;
     rclcpp::Subscription<String>::SharedPtr memo_status_sub_;
+    rclcpp::Subscription<String>::SharedPtr memo_ui_frame_sub_, memo_preferences_state_sub_;
+    rclcpp::Publisher<String>::SharedPtr memo_preferences_pub_;
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr recording_sub_;
 
     // GPS: robot fix in, GPS goals out through graph_navigation's service.
@@ -340,19 +346,19 @@ void MergeMessage(const VisualizationMsg &m1,
 
 void DropOldMessages()
 {
-    const auto now = rclcpp::Clock().now();
+    const auto now = node_->now();
     const double max_age = CONFIG_message_timeout_sec;
     if ((now - rclcpp::Time(laser_scan_.header.stamp)).seconds() > max_age)
     {
         laser_scan_.header.stamp = rclcpp::Time(0, 0);
     }
-    std::remove_if(
+    vis_msgs_.erase(std::remove_if(
         vis_msgs_.begin(),
         vis_msgs_.end(),
         [&now, max_age](const VisualizationMsg &m)
         {
             return ((now - rclcpp::Time(m.header.stamp)).seconds() > max_age);
-        });
+        }), vis_msgs_.end());
 }
 
 void SendUpdate()
@@ -392,13 +398,13 @@ void SetInitialPose(float x, float y, float theta, QString map)
         printf("Set initial pose: %s %f,%f, %f\n",
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
-    initial_pose_msg_.header.stamp = rclcpp::Clock().now();
+    initial_pose_msg_.header.stamp = node_->now();
     initial_pose_msg_.pose.pose.position.x = x;
     initial_pose_msg_.pose.pose.position.y = y;
     initial_pose_msg_.pose.pose.orientation.w = cos(0.5 * theta);
     initial_pose_msg_.pose.pose.orientation.z = sin(0.5 * theta);
     init_loc_pub_->publish(initial_pose_msg_);
-    amrl_initial_pose_msg_.header.stamp = rclcpp::Clock().now();
+    amrl_initial_pose_msg_.header.stamp = node_->now();
     amrl_initial_pose_msg_.map = map.toStdString();
     amrl_initial_pose_msg_.pose.x = x;
     amrl_initial_pose_msg_.pose.y = y;
@@ -422,13 +428,13 @@ void SetNavGoal(float x, float y, float theta, QString map)
         printf("Set nav goal: %s %f,%f, %f\n",
                map.toStdString().c_str(), x, y, math_util::RadToDeg(theta));
     }
-    nav_goal_msg_.header.stamp = rclcpp::Clock().now();
+    nav_goal_msg_.header.stamp = node_->now();
     nav_goal_msg_.pose.position.x = x;
     nav_goal_msg_.pose.position.y = y;
     nav_goal_msg_.pose.orientation.w = cos(0.5 * theta);
     nav_goal_msg_.pose.orientation.z = sin(0.5 * theta);
     nav_goal_pub_->publish(nav_goal_msg_);
-    amrl_nav_goal_msg_.header.stamp = rclcpp::Clock().now();
+    amrl_nav_goal_msg_.header.stamp = node_->now();
     amrl_nav_goal_msg_.map = map.toStdString();
     amrl_nav_goal_msg_.pose.x = x;
     amrl_nav_goal_msg_.pose.y = y;
@@ -604,12 +610,12 @@ static void CreateImagePanels()
 // Forward the memo planner's JSON status (std_msgs/String) to the browser as
 // ``{"type": "memo_status", "status": {...}}``. A status that is not valid
 // JSON is forwarded as a string.
-static void OnMemoStatus(const String::SharedPtr msg)
+static void OnMemoStatus(const String::SharedPtr msg, const char *type = "memo_status")
 {
     if (server_ == nullptr)
         return;
     QJsonObject obj;
-    obj.insert("type", QJsonValue("memo_status"));
+    obj.insert("type", QJsonValue(type));
     QJsonParseError err;
     const QJsonDocument doc =
         QJsonDocument::fromJson(QByteArray::fromStdString(msg->data), &err);
@@ -640,6 +646,12 @@ static void CreateRecordingInterface()
 static void CreateMemoInterfaces()
 {
     memo_task_pub_ = node_->create_publisher<String>(CONFIG_memo_task_topic, 10);
+    memo_preferences_pub_ = node_->create_publisher<String>(CONFIG_memo_preferences_topic, 10);
+    memo_ui_frame_sub_ = node_->create_subscription<String>(CONFIG_memo_ui_frame_topic, 10,
+        [](const String::SharedPtr msg) { OnMemoStatus(msg, "memo_ui_frame"); });
+    memo_preferences_state_sub_ = node_->create_subscription<String>(
+        CONFIG_memo_preferences_state_topic, rclcpp::QoS(1).transient_local(),
+        [](const String::SharedPtr msg) { OnMemoStatus(msg, "memo_preferences_state"); });
     memo_status_sub_ = node_->create_subscription<String>(
         CONFIG_memo_status_topic, 10,
         [](const String::SharedPtr msg) { OnMemoStatus(msg); });
@@ -1178,6 +1190,12 @@ void *RosThread(void *arg)
         [](const QString &text)
         { HandleMemoTask(text); },
         Qt::QueuedConnection);
+    QObject::connect(server_, &RobotWebSocket::MemoPreferencesSignal, server_,
+        [](const QString &json) {
+            String msg;
+            msg.data = json.toStdString();
+            if (memo_preferences_pub_) memo_preferences_pub_->publish(msg);
+        }, Qt::QueuedConnection);
     QObject::connect(
         server_, &RobotWebSocket::SetGpsGoalsSignal,
         server_,
@@ -1185,7 +1203,8 @@ void *RosThread(void *arg)
         { HandleGpsGoals(goals); },
         Qt::QueuedConnection);
 
-    node_ = rclcpp::Node::make_shared(CONFIG_ros_node_name);
+    node_ = rclcpp::Node::make_shared(CONFIG_ros_node_name,
+        rclcpp::NodeOptions().parameter_overrides({rclcpp::Parameter("use_sim_time", FLAGS_use_sim_time)}));
 
     CreateSubscriptions();
     CreatePublishers();

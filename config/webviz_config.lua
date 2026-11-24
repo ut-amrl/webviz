@@ -63,21 +63,21 @@ performance = {
 };
 
 -- Image Panel Configuration
--- Two image panels are streamed to the browser. Each panel can subscribe to
+-- Optional legacy image streams. MEMO uses atomic /memo/ui_frame snapshots.
+-- Each legacy stream can subscribe to
 -- either sensor_msgs/CompressedImage (msg_type = "compressed", JPEG bytes
 -- forwarded as-is) or sensor_msgs/Image (msg_type = "raw", encoded to JPEG
 -- via OpenCV before forwarding).
 image_panels = {
   left = {
-    topic = "/camera/rgb/image_raw/compressed";
+    topic = ""; -- MEMO panels use the atomic memo.ui_frame_topic snapshot.
     -- topic = "/camera/rgb/image_raw";
     msg_type = "compressed";       -- "compressed" or "raw"
     queue_size = 1;
   };
-  -- Right panel shows memo's plan image: the keyframe views (oldest ->
-  -- current), the current one annotated with the plan and route window.
+  -- Optional secondary image stream (disabled for the MEMO layout).
   right = {
-    topic = "/memo/plan_image/compressed";
+    topic = ""; -- Images in /memo/ui_frame stay paired by observation stamp.
     msg_type = "compressed";
     queue_size = 1;
   };
@@ -95,6 +95,9 @@ image_streaming = {
 memo = {
   task_topic   = "/memo/task";
   status_topic = "/memo/status";
+  ui_frame_topic = "/memo/ui_frame";
+  preferences_topic = "/memo/preferences";
+  preferences_state_topic = "/memo/preferences_state";
 };
 
 -- GPS navigation (Map tab): the robot fix (amrl_msgs/GPSMsg, from

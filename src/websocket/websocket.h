@@ -26,6 +26,7 @@
 #include <QtCore/QMutex>
 #include <QtCore/QObject>
 #include <QtCore/QList>
+#include <QtCore/QMap>
 #include <QtCore/QByteArray>
 #include <QtCore/QString>
 #include <QtCore/QJsonArray>
@@ -151,6 +152,7 @@ Q_SIGNALS:
     void SetNavGoalSignal(float x, float y, float theta, QString map);
     void ResetNavGoalsSignal();
     void MemoTaskSignal(QString text);
+    void MemoPreferencesSignal(QString json);
     // [{lat, lng, heading?}, ...] clicked on the map tab.
     void SetGpsGoalsSignal(QJsonArray goals);
 
@@ -177,6 +179,7 @@ private:
     LaserScan laser_scan_;
     Localization2DMsg localization_;
 
+    QMap<QString, QString> memo_state_cache_;
     QMutex image_mutex_;
     std::deque<ImageFrame> image_queue_;
 };

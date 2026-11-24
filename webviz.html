@@ -13,154 +13,51 @@
   <script src="vendor/maplibre/leaflet-maplibre-gl.js"></script>
   <script src="map_style.js"></script>
   <script src="offline_map.js"></script>
+  <script src="viz_style.js"></script>
   <style>
-    /* Bootstrap covers the rest; only retain things Bootstrap does not. */
-    /* Robot tab fills the viewport under the header so the images, the
-       sideways chat, and the point cloud are on screen together. */
-    body.robot-view {
-      height: 100vh;
-      overflow: hidden;
-    }
-    body.robot-view .container-fluid {
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    #tab-robot.tab-pane-x.active {
-      display: flex;
-      flex-direction: column;
-      flex: 1 1 auto;
-      min-height: 0;
-    }
-
+    /* Compact, adjoining panels sized to the visual content. */
+    body.robot-view { min-height: 100vh; overflow: auto; background: #f5f6f7 !important; }
+    body.robot-view .container-fluid { padding: 6px !important; }
+    body.robot-view h4 { font-size: 1rem; }
+    #tab-robot.tab-pane-x.active { display: flex; flex-direction: column; min-height: 0; }
     .robot-media-row {
-      display: flex;
-      flex-direction: row;
-      gap: 8px;
-      flex: 0 0 9.5rem;
-      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(400px, 2fr) repeat(2, minmax(250px, 1fr));
+      gap: 0;
+      height: clamp(245px, 22vw, 340px);
+      overflow-x: auto;
+      border: 1px solid #cdd1d5;
     }
-    .robot-image-card,
-    .robot-chat-card {
-      margin-bottom: 0;
-      min-width: 0;
-      min-height: 0;
-    }
-    .robot-image-card {
-      flex: 0 0 16rem;
-    }
-    .robot-chat-card {
-      flex: 1 1 auto;
-    }
-    .robot-image-card .card-body,
-    .robot-chat-card .card-body {
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-    .robot-map {
-      position: relative;
-      /* Do not let the column shrink this away. The height is whatever
-         the viewport has left under the header, task, and image row. */
-      flex: 0 0 auto;
-      height: calc(100vh - 27.5rem);
-      min-height: 9rem;
-      background: #fff;
-    }
-    .robot-map .text-muted {
-      position: absolute;
-      left: 4px;
-      bottom: 0;
-      z-index: 1;
-    }
-
-    #canvas {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: calc(100% - 16px);
-      background: #fff;
-      display: block;
-      user-select: none;
-      outline: none;
-    }
-
-    .panel-image {
-      width: 100%;
-      flex: 1 1 auto;
-      height: 0;
-      min-height: 0;
-      object-fit: contain;
-      background: #f0f0f0;
-    }
-
-    /* Chat is a horizontal strip: oldest bubble on the left, newest on
-       the right, with its own sideways scrollbar. */
-    #chatHistory {
-      display: flex;
-      flex-direction: row;
-      align-items: stretch;
-      gap: 8px;
-      flex: 1 1 auto;
-      min-height: 0;
-      overflow-x: scroll;
-      overflow-y: hidden;
-      padding-bottom: 2px;
-    }
-
-    .chat-bubble {
-      flex: 0 0 14rem;
-      max-width: 14rem;
-      align-self: stretch;
-      overflow-x: hidden;
-      overflow-y: auto;
-      border-radius: 8px;
-      padding: 6px 8px;
-      font-size: 0.8rem;
-      line-height: 1.25;
-      word-break: break-word;
-      white-space: pre-wrap;
-    }
-
-    .chat-bubble-thinking {
-      background: #f3f4f6;
+    .memo-panel { min-width: 0; min-height: 0; border: 0; border-right: 1px solid #cdd1d5; border-radius: 0; background: #fff; }
+    .memo-panel:last-child { border-right: 0; }
+    .memo-panel .card-body { display: flex; flex-direction: column; padding: 0 !important; min-height: 0; }
+    .panel-heading, .panel-toolbar {
+      flex: 0 0 30px;
+      min-height: 30px;
+      margin: 0;
+      padding: 5px 8px;
+      background: #e9ecef;
+      border-bottom: 1px solid #d5d9dd;
       color: #495057;
-      font-style: italic;
-    }
-
-    .chat-bubble-motion {
-      background: #e7f1ff;
-      color: #0b3d91;
-    }
-
-    .chat-bubble-critic {
-      background: #f4e7ff;
-      color: #4a148c;
-    }
-
-    .chat-bubble-user {
-      background: #e2e3e5;
-      color: #212529;
+      font-size: .8rem;
       font-weight: 500;
+      line-height: 20px;
     }
-
-    .chat-thumb {
-      width: 100%;
-      max-height: 18vh;
-      object-fit: contain;
-      background: #ffffff;
-      border-radius: 4px;
-      margin-top: 4px;
-    }
-
-    .chat-meta {
-      font-size: 0.7rem;
-      opacity: 0.75;
-      margin-bottom: 2px;
-    }
+    .panel-toolbar .panel-heading { padding: 0; border: 0; min-height: 0; flex: 1; }
+    .panel-toolbar .btn { height: 22px; padding: 0 7px; font-size: .75rem; line-height: 20px; border-radius: 2px; }
+    .panel-toolbar { padding-top: 3px; padding-bottom: 3px; }
+    .panel-image { width: 100%; flex: 1; min-height: 0; height: 0; object-fit: contain; background: #f8f9fa; font-size: .75rem; color: #6c757d; }
+    .observation-stage { position: relative; flex: 1; min-height: 0; background: #f8f9fa; }
+    .observation-stage > .panel-image { position: absolute; inset: 0; height: 100%; width: 100%; }
+    .robot-map { position: relative; flex: 1; min-height: 0; }
+    #canvas { position: absolute; inset: 0; width: 100%; height: 100%; background: #fff; outline: none; }
+    #coords { font-variant-numeric: tabular-nums; }
+    #preferenceRows { overflow-y: auto; flex: 1; padding: 6px; }
+    .preference-row { display: flex; gap: 4px; align-items: start; margin-bottom: 5px; }
+    .preference-row:last-child { margin-bottom: 0; }
+    .preference-row textarea { resize: vertical; min-height: 45px; height: 45px; padding: 4px 6px; font-size: .78rem; line-height: 1.35; border-radius: 2px; }
+    .preference-row .btn { padding: 0 5px; height: 23px; border-radius: 2px; line-height: 21px; }
+    .panel-note { flex: 0 0 22px; margin: 0; padding: 3px 7px; border-top: 1px solid #e1e4e8; background: #f5f6f7; font-size: .68rem; line-height: 16px; color: #6c757d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     /* Tabs: one pane visible at a time, selected by the URL hash. */
     .tab-pane-x { display: none; }
@@ -310,18 +207,18 @@
 
     <!-- Robot: local map, cameras and the memo planner -->
     <div id="tab-robot" class="tab-pane-x">
-    <div class="row g-2 mb-2">
+    <div class="row g-2 mb-2 d-none">
       <div class="col-auto">
         <button type="button" id="setLocation" class="btn btn-sm btn-outline-secondary"
-          onclick="setLocationButton()">Set Pose</button>
+          disabled title="Use the Map tab for global navigation" onclick="setLocationButton()">Set Pose</button>
       </div>
       <div class="col-auto">
-        <button type="button" id="setNavGoal" class="btn btn-sm btn-outline-secondary" onclick="setNavGoalButton()">Set
+        <button type="button" id="setNavGoal" class="btn btn-sm btn-outline-secondary" disabled title="Use the Map tab for global navigation" onclick="setNavGoalButton()">Set
           Nav Target</button>
       </div>
       <div class="col-auto">
         <button type="button" id="setWaypoints" class="btn btn-sm btn-outline-secondary"
-          onclick="setWaypointsButton()">Set Waypoints</button>
+          disabled title="Use the Map tab for global navigation" onclick="setWaypointsButton()">Set Waypoints</button>
       </div>
       <div class="col-auto">
         <button type="button" id="resetNav" class="btn btn-sm btn-outline-danger" onclick="resetNavButton()">Reset
@@ -359,10 +256,7 @@
               <div class="col-md-3"><label class="form-label small">Waypoint Pause (sec)</label>
                 <input type="number" id="waypointPause" class="form-control form-control-sm" value="15.0" step="1.0">
               </div>
-              <div class="col-md-3"><label class="form-label small">Chat history (turns)</label>
-                <input type="number" id="chatHistoryTurns" class="form-control form-control-sm" value="8" min="1"
-                  max="64" step="1">
-              </div>
+
             </div>
           </div>
         </div>
@@ -392,32 +286,32 @@
     </div>
 
     <div class="robot-media-row mb-2">
-      <div class="card robot-image-card">
-        <div class="card-body p-2">
-          <div class="text-muted small">Left panel</div>
-          <img id="imgLeft" class="panel-image" alt="most recent camera image">
+      <section class="card memo-panel"><div class="card-body p-3">
+        <h2 class="panel-heading">Observation · policy plan <span class="float-end text-muted">Satellite · goal route ↗</span></h2>
+        <div class="observation-stage">
+          <img id="imgLeft" class="panel-image" alt="Current egocentric image annotated with the cyan sampled plan and satellite goal route composited into its top-right corner">
         </div>
-      </div>
-      <div class="card robot-image-card">
-        <div class="card-body p-2">
-          <div class="text-muted small">Memo plan</div>
-          <img id="imgRight" class="panel-image" alt="memo plan image">
+        <div class="panel-note d-flex gap-2">
+          <span id="observationStamp">Waiting for a policy observation</span>
+          <span id="satelliteStatus" class="text-truncate">Waiting for a policy route</span>
         </div>
-      </div>
-      <div class="card robot-chat-card">
-        <div class="card-body p-2">
-          <div class="text-muted small d-flex justify-content-between align-items-center">
-            <span>Memo planner</span>
-            <span class="small">plans <span id="memoPlanCount">0</span></span>
+      </div></section>
+      <section class="card memo-panel"><div class="card-body p-3">
+        <h2 class="panel-heading">Local BEV · point cloud</h2>
+        <div class="robot-map"><canvas id="canvas" width="400" height="600" tabindex="0" aria-label="Robot local point cloud, policy plan, and path rollouts"></canvas></div>
+        <div class="panel-note">Blue: rollouts · Cyan: prediction · Red: tracking <span id="coords" class="visually-hidden">x=0, y=0</span></div>
+      </div></section>
+      <section class="card memo-panel"><div class="card-body p-3">
+        <div class="panel-toolbar d-flex justify-content-between align-items-center">
+          <h2 class="panel-heading mb-0">Language preferences</h2>
+          <div class="d-flex gap-1">
+            <button id="addPreference" class="btn btn-sm btn-outline-primary" aria-label="Add preference" onclick="addPreference()" disabled>+</button>
+            <button id="resetPreferences" class="btn btn-sm btn-secondary" onclick="resetPreferences()" disabled>Reset</button>
           </div>
-          <div id="chatHistory"></div>
         </div>
-      </div>
-    </div>
-
-    <div class="robot-map">
-      <canvas id="canvas" width="800" height="600" tabindex="0"></canvas>
-      <div class="text-muted small"><span id="coords">0,0</span></div>
+        <div id="preferenceRows"></div>
+        <div class="panel-note" id="preferenceStatus" role="status" aria-live="polite">Waiting for planner preferences</div>
+      </div></section>
     </div>
     </div> <!-- tab-robot -->
   </div>
@@ -475,10 +369,6 @@
       if (window.localStorage.getItem('waypointPause')) {
         document.getElementById('waypointPause').value =
           window.localStorage.getItem('waypointPause');
-      }
-      if (window.localStorage.getItem('chatHistoryTurns')) {
-        document.getElementById('chatHistoryTurns').value =
-          window.localStorage.getItem('chatHistoryTurns');
       }
     } catch (e) {
       updateStatus('Unable to access localstorage, settings will not be saved');
@@ -636,17 +526,7 @@
       }
 
       readColor() {
-        const c = this.readUint32();
-        const a = Math.abs((c & 0xFF000000) >> 24);
-        const r = (c & 0xFF0000) >> 16;
-        const g = (c & 0xFF00) >> 8;
-        const b = c & 0xFF;
-        if (a > 0) {
-          return `rgba(${r},${g},${b},${a / 255})`;
-        } else {
-          return `rgb(${r},${g},${b})`;
-        }
-
+        return MemoVizStyle.decodeColor(this.readUint32());
       }
 
       readPoint2D() {
@@ -1029,38 +909,21 @@
 
     // Get the "true" mouse location, compensting for scroll, zoom, etc.
     function getMouseLocation(event, element) {
-      var posx = 0;
-      var posy = 0;
-      if (!event) var event = window.event;
-      if (event.pageX || event.pageY) {
-        posx = event.pageX;
-        posy = event.pageY;
-      } else if (event.clientX || event.clientY) {
-        posx = event.clientX + document.body.scrollLeft
-          + document.documentElement.scrollLeft;
-        posy = event.clientY + document.body.scrollTop
-          + document.documentElement.scrollTop;
-      }
-      if (element != undefined &&
-        isFinite(element.offsetLeft) &&
-        isFinite(element.offsetTop)) {
-        posx -= element.offsetLeft;
-        posy -= element.offsetTop;
-      }
-      return ({ x: posx, y: posy });
+      const rect = element.getBoundingClientRect();
+      return {x: event.clientX - rect.left, y: event.clientY - rect.top};
     }
 
     function canvasToWorld(p) {
       return {
-        x: (p.x - origin.x) / scale,
-        y: (origin.y - p.y) / scale
+        x: (origin.y - p.y) / scale,
+        y: (origin.x - p.x) / scale
       };
     }
 
     function worldToCanvas(p) {
       return {
-        x: p.x * scale + origin.x,
-        y: origin.y - p.y * scale
+        x: origin.x - p.y * scale,
+        y: origin.y - p.x * scale
       };
     }
 
@@ -1080,11 +943,6 @@
       mouseDownLoc = getMouseLocation(event, canvas);
       mouseDown = true;
       prev_origin = { x: origin.x, y: origin.y };
-      if (event.ctrlKey) {
-        setNavGoal = true;
-      } else if (event.shiftKey) {
-        setLocation = true;
-      }
     };
 
     function onMouseUp(event) {
@@ -1152,7 +1010,9 @@
     }
 
     function drawLine(color, x1, y1, x2, y2) {
-      ctx.strokeStyle = color;
+      const stroke = MemoVizStyle.stroke(color);
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.width;
       ctx.beginPath();
       const p1 = worldToCanvas({ x: x1, y: y1 });
       const p2 = worldToCanvas({ x: x2, y: y2 });
@@ -1200,118 +1060,78 @@
       robotPose = d.robotPose;
     }
 
-    // Tracks the previously-issued blob URL per panel so we can revoke it
-    // after assigning a new one. Without this, every frame leaks memory.
-    var imagePanelObjectURLs = { 0: null, 1: null };
+    const replayMode = new URLSearchParams(window.location.search).get('replay') === '1';
+    let preferencesReady = false;
+    let displayRevision = 0;
+    let hasDisplayFrame = false;
+    // Images come together in /memo/ui_frame, never from independent live topics.
+    function receiveImageFrame(frame) {}
+    function setMemoStatus(text) { document.getElementById('memoStatus').textContent = text; }
 
-    function panelIdToImgElement(panelId) {
-      if (panelId === 0) return document.getElementById('imgLeft');
-      if (panelId === 1) return document.getElementById('imgRight');
-      return null;
+    function renderPreferences(rows, defaults) {
+      preferencesReady = true;
+      const root = document.getElementById('preferenceRows');
+      root.replaceChildren();
+      rows.forEach(text => addPreference(text));
+      document.getElementById('addPreference').disabled = replayMode;
+      document.getElementById('resetPreferences').disabled = replayMode;
+      document.getElementById('preferenceStatus').textContent = replayMode ? 'Recorded policy preferences' : 'Changes apply to the next policy plan';
     }
-
-    function setPanelImage(panelId, jpegBytes) {
-      const img = panelIdToImgElement(panelId);
-      if (!img) return;
-      const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
-      const url = URL.createObjectURL(blob);
-      const previous = imagePanelObjectURLs[panelId];
-      img.src = url;
-      imagePanelObjectURLs[panelId] = url;
-      if (previous) URL.revokeObjectURL(previous);
+    function addPreference(text = '') {
+      const root = document.getElementById('preferenceRows');
+      if (root.children.length >= 64) return;
+      const row = document.createElement('div');
+      row.className = 'preference-row';
+      const input = document.createElement('textarea');
+      input.className = 'form-control';
+      input.setAttribute('aria-label', 'Language preference');
+      input.value = text;
+      input.maxLength = 2000;
+      input.disabled = replayMode;
+      input.onchange = savePreferences;
+      const remove = document.createElement('button');
+      remove.className = 'btn btn-sm btn-danger';
+      remove.textContent = '−';
+      remove.setAttribute('aria-label', 'Remove preference');
+      remove.disabled = replayMode;
+      remove.onclick = () => { row.remove(); savePreferences(); };
+      row.append(input, remove);
+      root.append(row);
+      if (!text && !replayMode) input.focus();
     }
-
-    function receiveImageFrame(frame) {
-      setPanelImage(frame.panel_id, frame.jpegBytes);
-    }
-
-    function setMemoStatus(text) {
-      document.getElementById('memoStatus').textContent = text;
-    }
-
-    // Planner transcript: the task bubble, then one bubble per memo plan
-    // (status JSON from /memo/status), trimmed to the configured history.
-    // Cleared by a new task (sendMemoTask) or reset (sendResetNavGoals).
-
-    function chatHistoryMaxTurns() {
-      const v = parseInt(
-        document.getElementById('chatHistoryTurns').value, 10);
-      return (Number.isFinite(v) && v > 0) ? v : 8;
-    }
-
-    function clearChatHistory() {
-      const root = document.getElementById('chatHistory');
-      while (root.firstChild) root.removeChild(root.firstChild);
-    }
-
-    function trimChatHistoryToMax() {
-      const root = document.getElementById('chatHistory');
-      const maxBubbles = chatHistoryMaxTurns();
-      while (root.children.length > maxBubbles) {
-        root.removeChild(root.firstChild);
+    function sendPreferences(command) {
+      if (replayMode || !preferencesReady) return;
+      if (!robot_interface || robot_interface.socket.readyState !== WebSocket.OPEN) {
+        document.getElementById('preferenceStatus').textContent = 'Disconnected · changes have not been sent';
+        return;
       }
+      robot_interface.socket.send(JSON.stringify({type: 'memo_preferences', ...command}));
+      document.getElementById('preferenceStatus').textContent = 'Saving preferences…';
     }
-
-    function appendChatBubble(kind, headerHtml, bodyText, imageB64) {
-      const root = document.getElementById('chatHistory');
-      const bubble = document.createElement('div');
-      bubble.className = `chat-bubble chat-bubble-${kind}`;
-      if (headerHtml) {
-        const hdr = document.createElement('div');
-        hdr.className = 'chat-meta';
-        hdr.innerHTML = headerHtml;
-        bubble.appendChild(hdr);
-      }
-      if (bodyText) {
-        const body = document.createElement('div');
-        body.textContent = bodyText;
-        bubble.appendChild(body);
-      }
-      if (imageB64) {
-        const img = document.createElement('img');
-        img.className = 'chat-thumb';
-        img.alt = 'motion plan image';
-        img.src = `data:image/jpeg;base64,${imageB64}`;
-        bubble.appendChild(img);
-      }
-      root.appendChild(bubble);
-      trimChatHistoryToMax();
-      root.scrollLeft = root.scrollWidth;
+    function savePreferences() {
+      sendPreferences({preferences: Array.from(document.querySelectorAll('#preferenceRows textarea'), el => el.value)});
     }
-
-    function appendUserBubble(text) {
-      appendChatBubble('user', 'goal', text, null);
-    }
-
-    function appendThinkingBubble(reflectionId, text) {
-      const meta = `thinking &middot; refl ${reflectionId}`;
-      appendChatBubble('thinking', meta, text, null);
-    }
-
-    function appendMotionBubble(reflectionId, text, imageB64) {
-      const meta = `plan #${reflectionId}`;
-      appendChatBubble('motion', meta, text, imageB64);
-    }
-
-    function appendCriticBubble(reflectionId, text, verdict, reason) {
-      const verdictLabel = verdict === 'true' ? 'PASS'
-        : verdict === 'false' ? 'FAIL'
-          : '';
-      const verdictClass = verdict === 'true' ? 'bg-success'
-        : verdict === 'false' ? 'bg-danger'
-          : 'bg-secondary';
-      const pill = verdictLabel
-        ? `<span class="badge ${verdictClass} ms-1">${verdictLabel}</span>`
-        : '';
-      const meta = `critic &middot; refl ${reflectionId}${pill}`;
-      // Prefer the parsed reason for readability, but fall back to the raw
-      // critic completion when the planner could not parse it.
-      const body = (reason && reason.length > 0) ? reason : (text || '');
-      appendChatBubble('critic', meta, body, null);
+    function resetPreferences() { sendPreferences({reset: true}); }
+    async function onMemoFrame(frame) {
+      const revision = ++displayRevision;
+      const images = [new Image()];
+      images[0].src = 'data:image/jpeg;base64,' + frame.observation_jpeg;
+      try { await Promise.all(images.map(img => img.decode())); }
+      catch (error) { setMemoStatus('Unable to decode recorded display frame'); return; }
+      if (revision !== displayRevision) return;
+      hasDisplayFrame = true;
+      document.getElementById('imgLeft').src = images[0].src;
+      document.getElementById('observationStamp').textContent = 'Observation ' + Number(frame.image_stamp).toFixed(6) + ' s · cyan: sampled plan';
+      const satelliteText = frame.satellite.status + ' · heading up · radius ' + frame.satellite.radius_m.toFixed(1) + ' m';
+      document.getElementById('satelliteStatus').textContent = satelliteText;
+      document.getElementById('satelliteStatus').title = satelliteText;
+      if (!preferencesReady) renderPreferences(frame.preferences, frame.defaults);
+      if (replayMode) document.getElementById('memoInput').value = frame.task || '';
+      setMemoStatus('Observation ' + Number(frame.image_stamp).toFixed(6) + ' s');
     }
 
     function sendMemoTask() {
-      if (!robot_interface || !robot_interface.socket) {
+      if (replayMode || !robot_interface || !robot_interface.socket || robot_interface.socket.readyState !== WebSocket.OPEN) {
         setMemoStatus('not connected');
         return;
       }
@@ -1323,12 +1143,11 @@
         text: text,
       }));
       setMemoStatus('sending...');
-      clearChatHistory();
-      appendUserBubble(text);
+
     }
 
     function sendResetNavGoals() {
-      if (!robot_interface || !robot_interface.socket) {
+      if (replayMode || !robot_interface || !robot_interface.socket || robot_interface.socket.readyState !== WebSocket.OPEN) {
         setMemoStatus('not connected');
         return;
       }
@@ -1336,35 +1155,17 @@
         type: 'reset_nav_goals',
       }));
       setMemoStatus('reset');
-      clearChatHistory();
-    }
 
-    var memoPlanCount = 0;
+    }
 
     function fmtNum(v, digits) {
       return (typeof v === 'number' && isFinite(v)) ? v.toFixed(digits) : '-';
     }
 
-    // One bubble per plan: a compact summary of the status JSON. Timing keys
-    // vary by backend, so every *_ms field is listed.
     function onMemoStatus(json) {
       const st = json.status;
-      memoPlanCount += 1;
-      document.getElementById('memoPlanCount').textContent = String(memoPlanCount);
-      if (typeof st !== 'object' || st === null) {
-        setMemoStatus(String(st));
-        appendMotionBubble(memoPlanCount, String(st), null);
-        return;
-      }
-      const parts = [];
-      if (st.views !== undefined) parts.push(`views ${st.views}`);
-      const timing = Object.assign({}, st.timing || {}, st);
-      Object.keys(timing).filter(k => /_ms$/.test(k)).forEach(k => {
-        parts.push(`${k.replace(/_ms$/, '')} ${fmtNum(timing[k], 1)} ms`);
-      });
-      if (st.task) parts.push(`task "${st.task}"`);
-      setMemoStatus(`planned (${new Date().toLocaleTimeString()})`);
-      appendMotionBubble(memoPlanCount, parts.join(' \u00b7 ') || JSON.stringify(st), null);
+      if (st && typeof st === 'object' && st.image_stamp !== undefined)
+        setMemoStatus(hasDisplayFrame ? 'Observation ' + Number(st.image_stamp).toFixed(6) + ' s' : 'Policy running · waiting for display stream');
     }
 
     function processJsonData(json) {
@@ -1375,6 +1176,9 @@
         case 'gps': onRobotGps(json); return;
         case 'gps_route': onGpsRoute(json); return;
         case 'memo_status': onMemoStatus(json); return;
+        case 'memo_ui_frame': onMemoFrame(json.status); return;
+        case 'memo_preferences_state':
+          renderPreferences(json.status.preferences, json.status.defaults); return;
         case 'memo_task_ack': setMemoStatus('task sent'); return;
       }
       if (json.error) {
@@ -1388,6 +1192,9 @@
     // ---- Tabs ------------------------------------------------------------
     // The URL hash selects the tab (#health, #map, #robot); Sensor Health is
     // the default so the robot display opens on it.
+    if (replayMode) {
+      ['memoInput', 'memoSend', 'memoReset', 'resetNav'].forEach(id => document.getElementById(id).disabled = true);
+    }
     const TABS = ['health', 'map', 'robot'];
 
     function currentTab() {
@@ -1559,7 +1366,7 @@
     }
 
     function sendGpsGoals() {
-      if (!robot_interface || !robot_interface.socket) {
+      if (replayMode || !robot_interface || !robot_interface.socket || robot_interface.socket.readyState !== WebSocket.OPEN) {
         setGpsStatus('not connected');
         return;
       }
@@ -1625,7 +1432,6 @@
         window.localStorage.setItem('positionThreshold', document.getElementById('positionThreshold').value);
         window.localStorage.setItem('orientationThreshold', document.getElementById('orientationThreshold').value);
         window.localStorage.setItem('waypointPause', document.getElementById('waypointPause').value);
-        window.localStorage.setItem('chatHistoryTurns', document.getElementById('chatHistoryTurns').value);
       } catch (e) {
         console.log('Localstorage denied');
       }
@@ -1743,7 +1549,6 @@
         // loadMap(visMsg.header.map);
       }
       drawGrid();
-      drawMap();
       drawLaserScan();
       drawPoints();
       drawLines();
@@ -1756,7 +1561,7 @@
         p1 = canvasToWorld(curMouseLoc);
         drawLine("#000000", p0.x, p0.y, p1.x, p1.y);
       }
-      if (visMsg) drawPose(visMsg.header.robot_pose, 'rgb(0, 150, 0)');
+      drawPose({x: 0, y: 0, theta: 0}, 'rgb(0, 150, 0)');
     }
 
     function setColor(c) {
@@ -1766,10 +1571,8 @@
     function drawPoints() {
       if (visMsg === undefined) return;
       visMsg.points.forEach(function (p, i) {
-        point = p.point;
-        if (i < visMsg.header.num_local_points) {
-          point = robotToMap(point);
-        }
+        if (i >= visMsg.header.num_local_points) return;
+        let point = p.point;
         drawPoint(p.color, point.x, point.y);
       });
     }
@@ -1793,12 +1596,9 @@
       if (visMsg === undefined) return;
       // console.log(visMsg.lines);
       visMsg.lines.forEach(function (l, i) {
+        if (i >= visMsg.header.num_local_lines) return;
         let p0 = l.p0;
         let p1 = l.p1;
-        if (i < visMsg.header.num_local_lines) {
-          p0 = robotToMap(p0);
-          p1 = robotToMap(p1);
-        }
         drawLine(l.color, p0.x, p0.y, p1.x, p1.y);
       });
     }
@@ -1806,10 +1606,8 @@
     function drawTextAnnotations() {
       if (visMsg == undefined) return;
       visMsg.textAnnotations.forEach(function (m, i) {
+        if (i >= visMsg.header.num_local_text_annotations) return;
         let p = m.start;
-        if (i < visMsg.header.num_local_text_annotations) {
-          p = robotToMap(p);
-        }
         drawTextAnnotation(m.str, p.x, p.y, m.color, m.size_em);
       });
     }
@@ -1818,23 +1616,21 @@
       if (visMsg === undefined) return;
       // console.log(visMsg.arcs);
       visMsg.arcs.forEach(function (a, i) {
+        if (i >= visMsg.header.num_local_arcs) return;
         let center = a.center;
         let theta0 = a.start_angle;
         let theta1 = a.end_angle;
-        if (i < visMsg.header.num_local_arcs) {
-          center = robotToMap(center);
-          theta0 += visMsg.header.robot_pose.theta;
-          theta1 += visMsg.header.robot_pose.theta;
-        }
         drawArc(a.color, center.x, center.y, a.radius, theta0, theta1);
       });
     }
 
     function drawArc(color, x, y, r, a0, a1) {
-      ctx.strokeStyle = color;
+      const stroke = MemoVizStyle.stroke(color);
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.width;
       const p = worldToCanvas({ x: x, y: y });
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r * scale, -a0, -a1, true);
+      ctx.arc(p.x, p.y, r * scale, -Math.PI / 2 - a0, -Math.PI / 2 - a1, true);
       ctx.stroke();
     }
 
@@ -1934,15 +1730,7 @@
     function drawLaserScan() {
       if (!lastLaserScan) return;
       let offset = { x: 0, y: 0, theta: 0 };
-      if (robotPose) {
-        // Configurable laser offset on the robot
-        const laserOffset = parseFloat(document.getElementById('laserOffset').value) || 0.2;
-        offset = {
-          x: robotPose.x + laserOffset * Math.cos(robotPose.theta),
-          y: robotPose.y + laserOffset * Math.sin(robotPose.theta),
-          theta: robotPose.theta
-        };
-      }
+      offset.x = parseFloat(document.getElementById('laserOffset').value) || 0;
       // Update map and draw line being made.
       // ctx.strokeStyle = 'rgba(82, 125, 232, 1)';
       // ctx.lineWidth = 2;

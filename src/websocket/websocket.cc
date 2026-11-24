@@ -127,6 +127,8 @@ void RobotWebSocket::onNewConnection()
             this, &RobotWebSocket::socketDisconnected);
 
     clients_.push_back(socket);
+    for (auto it = memo_state_cache_.cbegin(); it != memo_state_cache_.cend(); ++it)
+        socket->sendTextMessage(it.value());
 }
 
 void RobotWebSocket::processTextMessage(QString message)
@@ -478,6 +480,14 @@ void RobotWebSocket::ProcessCallback(const QJsonObject &json)
         }
         MemoTaskSignal(json.value("text").toString());
     }
+    else if (type == "memo_preferences")
+    {
+        if (!json.value("preferences").isArray() && !json.value("reset").toBool()) {
+            SendError("Invalid memo_preferences parameters");
+            return;
+        }
+        MemoPreferencesSignal(QString::fromUtf8(QJsonDocument(json).toJson(QJsonDocument::Compact)));
+    }
     else if (type == "set_gps_goals")
     {
         const QJsonArray goals = json.value("goals").toArray();
@@ -590,6 +600,10 @@ void RobotWebSocket::SendJson(const QString &payload_json)
 
 void RobotWebSocket::SendJsonSlot(QString payload_json)
 {
+    const auto obj = QJsonDocument::fromJson(payload_json.toUtf8()).object();
+    const auto type = obj.value("type").toString();
+    if (type == "memo_ui_frame" || type == "memo_preferences_state")
+        memo_state_cache_[type] = payload_json;
     if (FLAGS_v > 0)
     {
         fprintf(stderr,

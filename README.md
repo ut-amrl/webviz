@@ -146,3 +146,78 @@ def generate_launch_description():
 ## Technical Details
 
 For implementation details, protocol specifications, and architecture information, see [Technical Documentation](src/websocket/README.md).
+
+## MEMO workspace and bag replay
+
+The Robot tab has a wide policy observation panel, the local point-cloud BEV,
+and editable language preferences. The observation shows the sampled plan in cyan
+and a heading-up satellite goal route in its top-right corner. The satellite is composited directly into the annotated egocentric JPEG pixels,
+with a maximum height of 35% of that image's height. The circular crop has no white corners or outline; the camera stays visible
+around it. The browser displays this single composite, and `/memo/plan_image/compressed` publishes the same JPEG. Panel height follows the content width
+and is capped at 340 px; panel borders have no gutters or card padding. On narrow
+screens the panels scroll horizontally. Rollouts are thin blue lines at 60% opacity. The raw policy prediction is cyan
+and the selected tracking path is red. BEV coordinates are robot-local, with
+forward up and left to the left; the Map tab handles global GPS goals.
+
+Preference rows save when editing finishes. Use **+** to add a row, the red **−**
+to remove it, and the gray **Reset** to restore the planner's configured
+`base_preferences`. An empty list intentionally removes all base preferences.
+The planner acknowledges the applied list on `/memo/preferences_state` and uses
+it on subsequent requests; changing preferences does not trigger robot motion.
+
+`/memo/ui_frame` (`std_msgs/String` JSON, version 1) records the observation stamp,
+exact unrounded policy route and waypoints, task, applied preferences and defaults,
+GPS placement, and both rendered JPEGs in one message. It is published even without
+a browser. Satellite rendering shares MEMO's dataset route renderer and reads only
+`$MEMO_WORK_DIR/geolocalizer/labeling/tiles/{z}/{x}/{y}.jpg`; it never downloads tiles.
+Missing GPS placement or cached tiles is shown explicitly. Phone GPS heading is in
+degrees clockwise from north; stamped odometry carries each fix to the policy
+observation before cropping the satellite image.
+
+After building `webviz`, `graph_navigation`, and `memo_deployment`, source the
+workspace inside the deployment container and run:
+
+```bash
+scripts/replay_memo_ui.sh /path/to/bag
+```
+
+Open `http://localhost:10273/webviz.html?autoconnect=1&replay=1#robot`. The helper
+starts the HTTP and websocket servers and plays only display topics with the ROS
+clock. It does not start inference or robot drivers. `replay=1` makes tasks and
+preferences read-only. Existing servers should be stopped before running the
+helper, since it uses the standard ports 10272 and 10273.
+
+The recorder inventory includes `/memo/ui_frame`, `/memo/preferences_state`,
+`/memo/preferences`, `/visualization`, `/scan`, and `/localization`. Replay uses
+recorded image bytes and navigation geometry, so it needs neither imagery caches
+nor a policy checkpoint. `/memo/preferences_state` is transient-local, with a
+recorder/playback QoS override to recover defaults even when recording starts late.
+Bags made before these display artifacts were recorded cannot reproduce the
+original sampled policy output exactly by rerunning stochastic inference.
+
+
+### Offline satellite coverage
+
+The citywide cache covers the full Austin offline-map rectangle:
+west **-98.05**, south **30.05**, east **-97.45**, north **30.60**. This includes
+East Austin and Mueller. Populate or resume it from the workspace:
+
+```bash
+scripts/cache_memo_satellite.py --austin --workers 24
+scripts/cache_memo_satellite.py --central-austin --workers 24
+```
+
+The citywide layer uses zoom 17 (about 1 m/pixel); the additional Central Austin
+layer uses zoom 19 (about 0.26 m/pixel). Both live under
+`data/geolocalizer/labeling/tiles` by default, or the same relative path under
+`MEMO_WORK_DIR`. The shared MEMO renderer prefers native zoom-19 tiles and crops
+cached parent tiles elsewhere, without downloading or writing enlarged copies.
+Existing images are checked and reused, corrupt entries are repaired, and failed
+requests are retried. The `austin_z17.json` and `central_austin_z19.json` manifests
+report verified coverage and any remaining gaps. These files persist across
+sessions; the live robot does not need Wi-Fi after the cache is populated.
+
+The camera overlay uses MEMO's ground-plane projection of predicted XY, matching
+evaluation instead of projecting noise in the predicted Z channel. Raw XYZ policy
+waypoints remain intact. The satellite route uses MEMO's shared `route_inset`
+renderer at the actual inset size, preserving line and marker widths.
