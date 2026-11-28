@@ -22,6 +22,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
+find_package(foxglove_msgs REQUIRED)
 
 # Convert AMENT_PREFIX_PATH to CMAKE_PREFIX_PATH (standard ROS2 pattern)
 if(DEFINED ENV{AMENT_PREFIX_PATH})
@@ -73,6 +74,7 @@ ament_target_dependencies(websocket
   sensor_msgs
   nav_msgs
   diagnostic_msgs
+  foxglove_msgs
   amrl_msgs
 )
 
@@ -93,7 +95,7 @@ install(TARGETS websocket
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(FILES webviz.html map_style.js offline_map.js viz_style.js
+install(FILES webviz.html map_style.js offline_map.js viz_style.js robot_map.js
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -105,6 +107,6 @@ install(FILES config/webviz_config.lua
   DESTINATION share/${PROJECT_NAME}/config
 )
 
-ament_export_dependencies(rclcpp ament_index_cpp std_msgs geometry_msgs sensor_msgs nav_msgs diagnostic_msgs amrl_msgs)
+ament_export_dependencies(rclcpp ament_index_cpp std_msgs geometry_msgs sensor_msgs nav_msgs diagnostic_msgs foxglove_msgs amrl_msgs)
 
 ament_package()

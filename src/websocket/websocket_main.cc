@@ -47,6 +47,7 @@
 #include "std_msgs/msg/empty.hpp"
 #include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "foxglove_msgs/msg/geo_json.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
@@ -246,6 +247,8 @@ namespace
     rclcpp::Subscription<String>::SharedPtr memo_ui_frame_sub_, memo_preferences_state_sub_;
     rclcpp::Publisher<String>::SharedPtr memo_preferences_pub_;
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr recording_sub_;
+    rclcpp::Subscription<String>::SharedPtr robot_state_sub_;
+    rclcpp::Subscription<foxglove_msgs::msg::GeoJSON>::SharedPtr goal_route_sub_;
 
     // GPS: robot fix in, GPS goals out through graph_navigation's service.
     rclcpp::Subscription<GPSMsg>::SharedPtr gps_sub_;
@@ -643,6 +646,21 @@ static void CreateRecordingInterface()
         });
 }
 
+// The command arbiter publishes the actual control mode, including manual override.
+static void CreateRobotStateInterface()
+{
+    robot_state_sub_ = node_->create_subscription<String>(
+        "/autonomy_arbiter/state", 1,
+        [](const String::SharedPtr msg)
+        {
+            QJsonObject obj;
+            obj.insert("type", QJsonValue("robot_state"));
+            obj.insert("state", QJsonValue(QString::fromStdString(msg->data)));
+            server_->SendJson(QString::fromUtf8(
+                QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+        });
+}
+
 static void CreateMemoInterfaces()
 {
     memo_task_pub_ = node_->create_publisher<String>(CONFIG_memo_task_topic, 10);
@@ -773,6 +791,18 @@ static void HandleGpsGoals(QJsonArray goals)
 
 static void CreateGpsInterfaces()
 {
+    goal_route_sub_ = node_->create_subscription<foxglove_msgs::msg::GeoJSON>(
+        "/navigation/geojson_waypoints", 1,
+        [](const foxglove_msgs::msg::GeoJSON::SharedPtr msg)
+        {
+            const auto doc = QJsonDocument::fromJson(QByteArray::fromStdString(msg->geojson));
+            if (!doc.isObject()) return;
+            QJsonObject obj;
+            obj.insert("type", QJsonValue("goal_route"));
+            obj.insert("route", doc.object());
+            server_->SendJson(QString::fromUtf8(
+                QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+        });
     gps_sub_ = node_->create_subscription<GPSMsg>(
         CONFIG_gps_fix_topic, rclcpp::SensorDataQoS(),
         [](const GPSMsg::SharedPtr msg) { OnGps(msg); });
@@ -1211,6 +1241,7 @@ void *RosThread(void *arg)
     CreateImagePanels();
     CreateMemoInterfaces();
     CreateRecordingInterface();
+    CreateRobotStateInterface();
     CreateGpsInterfaces();
     CreateSensorHealth();
 

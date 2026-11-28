@@ -14,6 +14,7 @@
   <script src="map_style.js"></script>
   <script src="offline_map.js"></script>
   <script src="viz_style.js"></script>
+  <script src="robot_map.js"></script>
   <style>
     /* Compact, adjoining panels sized to the visual content. */
     body.robot-view { min-height: 100vh; overflow: auto; background: #f5f6f7 !important; }
@@ -22,7 +23,7 @@
     #tab-robot.tab-pane-x.active { display: flex; flex-direction: column; min-height: 0; }
     .robot-media-row {
       display: grid;
-      grid-template-columns: minmax(400px, 2fr) repeat(2, minmax(250px, 1fr));
+      grid-template-columns: minmax(400px, 2fr) repeat(3, minmax(250px, 1fr));
       gap: 0;
       height: clamp(245px, 22vw, 340px);
       overflow-x: auto;
@@ -50,6 +51,7 @@
     .observation-stage { position: relative; flex: 1; min-height: 0; background: #f8f9fa; }
     .observation-stage > .panel-image { position: absolute; inset: 0; height: 100%; width: 100%; }
     .robot-map { position: relative; flex: 1; min-height: 0; }
+    #robotRouteMap { width: 100%; height: 100%; }
     #canvas { position: absolute; inset: 0; width: 100%; height: 100%; background: #fff; outline: none; }
     #coords { font-variant-numeric: tabular-nums; }
     #preferenceRows { overflow-y: auto; flex: 1; padding: 6px; }
@@ -120,6 +122,11 @@
           aria-live="polite">Unknown</span>
       </div>
       <div class="col-auto">
+        <span class="text-muted small">Robot:</span>
+        <span id="robotState" class="badge bg-secondary" role="status"
+          aria-live="polite">Unknown</span>
+      </div>
+      <div class="col-auto">
         <label for="map" class="col-form-label">Map:</label>
       </div>
       <div class="col-auto">
@@ -145,9 +152,9 @@
     </div>
 
     <ul class="nav nav-tabs mb-2" id="tabNav">
-      <li class="nav-item"><a class="nav-link" data-tab="health" href="#health">Sensor Health</a></li>
-      <li class="nav-item"><a class="nav-link" data-tab="map" href="#map">Map</a></li>
-      <li class="nav-item"><a class="nav-link" data-tab="robot" href="#robot">Robot</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="health" href="#health" title="Shortcut: S">Sensor Health (S)</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="map" href="#map" title="Shortcut: M">Map (M)</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="robot" href="#robot" title="Shortcut: R">Robot (R)</a></li>
     </ul>
 
     <!-- Sensor Health -->
@@ -268,7 +275,7 @@
         <div class="row g-2 align-items-center">
           <div class="col">
             <input type="text" id="memoInput" class="form-control form-control-sm"
-              placeholder="Task for memo (e.g. follow the sidewalk to the next waypoint)..." />
+              placeholder="Task for memo (default: go to the next waypoint)..." />
           </div>
           <div class="col-auto">
             <button type="button" id="memoSend" class="btn btn-sm btn-primary"
@@ -297,6 +304,15 @@
         </div>
       </div></section>
       <section class="card memo-panel"><div class="card-body p-3">
+        <div class="panel-toolbar d-flex justify-content-between align-items-center">
+          <h2 class="panel-heading">Satellite · goal route</h2>
+          <button class="btn btn-sm btn-outline-primary" onclick="robotRouteMap?.recenter()">Follow robot</button>
+        </div>
+        <div class="robot-map"><div id="robotRouteMap" aria-label="Robot location, red goal route, and blue local route points"></div></div>
+        <div class="panel-note" id="robotRouteStatus" role="status">Loading map...</div>
+        <div class="panel-note">Red: goal route · White/blue dots: local route</div>
+      </div></section>
+      <section class="card memo-panel"><div class="card-body p-3">
         <h2 class="panel-heading">Local BEV · point cloud</h2>
         <div class="robot-map"><canvas id="canvas" width="400" height="600" tabindex="0" aria-label="Robot local point cloud, policy plan, and path rollouts"></canvas></div>
         <div class="panel-note">Blue: rollouts · Cyan: prediction · Red: tracking <span id="coords" class="visually-hidden">x=0, y=0</span></div>
@@ -306,7 +322,7 @@
           <h2 class="panel-heading mb-0">Language preferences</h2>
           <div class="d-flex gap-1">
             <button id="addPreference" class="btn btn-sm btn-outline-primary" aria-label="Add preference" onclick="addPreference()" disabled>+</button>
-            <button id="resetPreferences" class="btn btn-sm btn-secondary" onclick="resetPreferences()" disabled>Reset</button>
+            <button id="resetPreferences" class="btn btn-sm btn-secondary" title="Clear all language preferences" onclick="resetPreferences()" disabled>Reset</button>
           </div>
         </div>
         <div id="preferenceRows"></div>
@@ -1035,7 +1051,10 @@
       const isConnected = /^Connected/i.test(str);
       s.classList.toggle('bg-success', isConnected);
       s.classList.toggle('bg-secondary', !isConnected);
-      if (!isConnected) setRecordingStatus(null);
+      if (!isConnected) {
+        setRecordingStatus(null);
+        setRobotState(null);
+      }
     }
 
     // Only fresh recorder feedback may turn this badge green. Losing the
@@ -1054,6 +1073,19 @@
       }
     }
 
+    var robotStateTimer = null;
+
+    function setRobotState(state) {
+      clearTimeout(robotStateTimer);
+      const colors = { Stopped: 'bg-danger', Manual: 'bg-primary',
+        Autonomous: 'bg-success', Override: 'bg-warning text-dark' };
+      const known = Object.prototype.hasOwnProperty.call(colors, state);
+      const badge = document.getElementById('robotState');
+      badge.textContent = known ? state : 'Unknown';
+      badge.className = 'badge ' + (known ? colors[state] : 'bg-secondary');
+      if (known) robotStateTimer = setTimeout(() => setRobotState(null), 3000);
+    }
+
     function receiveData(d) {
       visMsg = d;
       lastLaserScan = d.laser;
@@ -1064,6 +1096,7 @@
     let preferencesReady = false;
     let displayRevision = 0;
     let hasDisplayFrame = false;
+    var robotRouteMap;
     // Images come together in /memo/ui_frame, never from independent live topics.
     function receiveImageFrame(frame) {}
     function setMemoStatus(text) { document.getElementById('memoStatus').textContent = text; }
@@ -1075,7 +1108,8 @@
       rows.forEach(text => addPreference(text));
       document.getElementById('addPreference').disabled = replayMode;
       document.getElementById('resetPreferences').disabled = replayMode;
-      document.getElementById('preferenceStatus').textContent = replayMode ? 'Recorded policy preferences' : 'Changes apply to the next policy plan';
+      document.getElementById('preferenceStatus').textContent = replayMode ? 'Recorded policy preferences' :
+        rows.length ? 'Changes apply to the next policy plan' : 'No language preferences · policy default';
     }
     function addPreference(text = '') {
       const root = document.getElementById('preferenceRows');
@@ -1109,9 +1143,11 @@
       document.getElementById('preferenceStatus').textContent = 'Saving preferences…';
     }
     function savePreferences() {
-      sendPreferences({preferences: Array.from(document.querySelectorAll('#preferenceRows textarea'), el => el.value)});
+      sendPreferences({preferences: Array.from(document.querySelectorAll('#preferenceRows textarea'),
+        el => el.value.trim()).filter(Boolean)});
     }
-    function resetPreferences() { sendPreferences({reset: true}); }
+    // Reset always means no language preference, including with an older planner configuration.
+    function resetPreferences() { sendPreferences({preferences: []}); }
     async function onMemoFrame(frame) {
       const revision = ++displayRevision;
       const images = [new Image()];
@@ -1120,6 +1156,7 @@
       catch (error) { setMemoStatus('Unable to decode recorded display frame'); return; }
       if (revision !== displayRevision) return;
       hasDisplayFrame = true;
+      if (robotRouteMap) robotRouteMap.setFrame(frame);
       document.getElementById('imgLeft').src = images[0].src;
       document.getElementById('observationStamp').textContent = 'Observation ' + Number(frame.image_stamp).toFixed(6) + ' s · cyan: sampled plan';
       const satelliteText = frame.satellite.status + ' · heading up · radius ' + frame.satellite.radius_m.toFixed(1) + ' m';
@@ -1154,6 +1191,7 @@
       robot_interface.socket.send(JSON.stringify({
         type: 'reset_nav_goals',
       }));
+      clearGpsRoute();
       setMemoStatus('reset');
 
     }
@@ -1173,8 +1211,14 @@
       switch (json.type) {
         case 'sensor_health': onSensorHealth(json); return;
         case 'recording_status': setRecordingStatus(json.recording); return;
+        case 'robot_state': setRobotState(json.state); return;
         case 'gps': onRobotGps(json); return;
         case 'gps_route': onGpsRoute(json); return;
+        case 'goal_route':
+          onGpsRoute({ok: true, plan: (json.route.features || [])
+            .filter(feature => feature.geometry?.type === 'LineString')
+            .flatMap(feature => feature.geometry.coordinates.map(([lng, lat]) => ({lat, lng})))});
+          return;
         case 'memo_status': onMemoStatus(json); return;
         case 'memo_ui_frame': onMemoFrame(json.status); return;
         case 'memo_preferences_state':
@@ -1211,9 +1255,19 @@
       });
       document.body.classList.toggle('robot-view', name === 'robot');
       if (name === 'map' && gpsMap) setTimeout(() => gpsMap.invalidateSize(), 0);
-      if (name === 'robot') resizeCanvasToContainer();
+      if (name === 'robot') {
+        resizeCanvasToContainer();
+        if (robotRouteMap) setTimeout(() => robotRouteMap.map.invalidateSize(), 0);
+      }
     }
     window.addEventListener('hashchange', () => showTab(currentTab()));
+    document.addEventListener('keydown', event => {
+      const tab = tabShortcut(event);
+      if (!tab) return;
+      event.preventDefault();
+      window.location.hash = tab;
+      showTab(tab);
+    });
 
     // ---- Sensor health -----------------------------------------------------
     var lastHealthTime = 0;
@@ -1312,6 +1366,7 @@
     }
 
     function onRobotGps(json) {
+      if (robotRouteMap && !replayMode) robotRouteMap.setPosition([json.lat, json.lng]);
       document.getElementById('gpsRobot').textContent =
         `${fmtNum(json.lat, 6)}, ${fmtNum(json.lng, 6)} @ ${fmtNum(json.heading, 0)}\u00b0`;
       if (!gpsMap) return;
@@ -1349,6 +1404,7 @@
     }
 
     function clearGpsRoute() {
+      if (robotRouteMap) robotRouteMap.setRoute([]);
       if (gpsRouteLine) { gpsRouteLine.remove(); gpsRouteLine = undefined; }
       gpsRouteMarkers.forEach(m => m.remove());
       gpsRouteMarkers = [];
@@ -1386,6 +1442,7 @@
         return;
       }
       const pts = (json.plan || []).map(p => [p.lat, p.lng]);
+      if (robotRouteMap) robotRouteMap.setRoute(pts);
       if (gpsMap && pts.length > 0) {
         gpsRouteLine = L.polyline(pts, { color: '#0d6efd', weight: 4, opacity: 0.8 }).addTo(gpsMap);
         gpsRouteMarkers = pts.map(ll => L.circleMarker(ll, { radius: 3, color: '#0d6efd', fillOpacity: 1 }).addTo(gpsMap));
@@ -1476,6 +1533,9 @@
       showTab(currentTab());
       drawLoop();
       initGpsMap();
+      if (typeof L !== 'undefined') {
+        robotRouteMap = new RobotRouteMap('robotRouteMap', document.getElementById('robotRouteStatus'));
+      } else document.getElementById('robotRouteStatus').textContent = 'Map library failed to load';
       const mInput = document.getElementById('memoInput');
       if (mInput) {
         mInput.addEventListener('keydown', (e) => {
